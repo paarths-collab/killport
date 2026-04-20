@@ -34,3 +34,5 @@ go.work
 # GoReleaser
 *.tar.gz
 *.zip
+checksums.txt
+.goreleaser/
