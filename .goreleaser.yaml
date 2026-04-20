@@ -15,16 +15,19 @@ builds:
       - -s -w -X main.Version={{.Version}}
 
 archives:
-  - format: tar.gz
+  - formats: 
+      - tar.gz
     format_overrides:
       - goos: windows
-        format: zip
+        formats: 
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: 'checksums.txt'
 
 snapshot:
-  name_template: "{{ .Tag }}-next"
+  version_template: "{{ .Tag }}-next"
 
 changelog:
   sort: asc
@@ -37,3 +40,23 @@ release:
   github:
     owner: paarths-collab
     name: killport
+
+# Note: Keep the key as 'brews'. Ignore the warning about casks for now.
+brews:
+  - name: killport
+    repository:
+      owner: paarths-collab
+      name: homebrew-tap
+    directory: Formula
+    homepage: "https://github.com/paarths-collab/killport"
+    description: "Lightning-fast, AI-agent optimized port killer."
+    install: |
+      bin.install "killport"
+
+scoops:
+  - name: killport
+    repository:
+      owner: paarths-collab
+      name: scoop-bucket
+    homepage: "https://github.com/paarths-collab/killport"
+    description: "Lightning-fast, AI-agent optimized port killer."
