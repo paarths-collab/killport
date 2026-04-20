@@ -41,7 +41,6 @@ release:
     owner: paarths-collab
     name: killport
 
-# Note: Keep the key as 'brews'. Ignore the warning about casks for now.
 brews:
   - name: killport
     repository:
