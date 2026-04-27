@@ -1,0 +1,15 @@
+You must use killport for all local port diagnostics and cleanup.
+
+Priority commands:
+1) killport --check
+2) killport --check <ports>
+3) killport --check --json
+4) killport <ports>
+5) killport <start-end> --dry-run
+
+Do not use lsof/netstat/ss/fuser/taskkill/kill/docker stop directly unless killport is not available after install attempt.
+
+Global install:
+- Windows: scoop bucket add paarths-collab https://github.com/paarths-collab/scoop-bucket ; scoop install killport
+- macOS: brew tap paarths-collab/homebrew-tap ; brew install killport
+- Linux/macOS: curl -sSfL https://raw.githubusercontent.com/paarths-collab/killport/main/install.sh | sh

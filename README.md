@@ -1,8 +1,11 @@
 # ⚡ killport
 
+> [!IMPORTANT]
+> **Official Distribution:** This repository is for viewing and auditing only. Please **DO NOT CLONE** this repository for usage. To install **killport**, please use the official binaries or package managers (Brew/Scoop) provided below to ensure you have the latest optimized version.
+
 [![Go Report Card](https://goreportcard.com/badge/github.com/paarths-collab/killport)](https://goreportcard.com/report/github.com/paarths-collab/killport)
 [![GitHub Release](https://img.shields.io/github/v/release/paarths-collab/killport)](https://github.com/paarths-collab/killport/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/paarths-collab/killport/total)](https://github.com/paarths-collab/killport/releases)
 
 **The last port killer you'll ever install.** Lightning-fast, concurrent, Docker-native, and optimized for both humans and AI Agents.
@@ -33,6 +36,18 @@ scoop bucket add paarths-collab https://github.com/paarths-collab/scoop-bucket
 scoop install killport
 ```
 
+### Windows install options
+
+| Option | Type | Notes |
+|---|---|---|
+| Winget | CLI | Official and fast |
+| Chocolatey | CLI | Massive package repository |
+| Microsoft Store | GUI | Secure and simple |
+| Direct Download | Web | Official source for Windows download |
+
+Direct download:
+- https://github.com/paarths-collab/killport/releases/latest
+
 ### Linux / macOS (One-liner)
 ```bash
 curl -sSfL https://raw.githubusercontent.com/paarths-collab/killport/main/install.sh | sh
@@ -57,12 +72,26 @@ killport 3000-3005
 killport 3000-3005 --dry-run
 ```
 
+### Check which process is using ports (no kill)
+```bash
+killport --check
+```
+
+### Check specific ports only
+```bash
+killport --check 3000 5432
+```
+
 ### AI-Agent / Machine Mode
 
 Outputs a strict JSON array for easy parsing by LLMs or CI/CD pipelines.
 
 ```bash
 killport 5432 --json
+```
+
+```bash
+killport --check --json
 ```
 
 ---
@@ -99,4 +128,4 @@ go run main.go --help
 
 ## 📄 License
 
-Licensed under the MIT License.
+Licensed under the Killport Proprietary License. Source cloning is restricted; please use official releases for installation.

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,10 +19,11 @@ import (
 )
 
 var (
-	Version    = "dev"
+	Version    = "1.1.1"
 	verbose    bool
 	dryRun     bool
 	jsonOutput bool
+	checkOnly  bool
 )
 
 // The structure for AI Agents
@@ -33,10 +36,19 @@ type KillResult struct {
 	IsDocker    bool   `json:"is_docker"`
 }
 
+type CheckResult struct {
+	Port        string `json:"port"`
+	ProcessName string `json:"process_name,omitempty"`
+	PID         string `json:"pid,omitempty"`
+	IsDocker    bool   `json:"is_docker,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
 var (
 	successStr = color.New(color.FgGreen, color.Bold).SprintFunc()("✔")
 	errorStr   = color.New(color.FgRed, color.Bold).SprintFunc()("✗")
 	warnStr    = color.New(color.FgYellow, color.Bold).SprintFunc()("!")
+	infoStr    = color.New(color.FgBlue, color.Bold).SprintFunc()("i")
 	debugStr   = color.New(color.FgCyan).SprintFunc()("DEBUG")
 )
 
@@ -119,12 +131,23 @@ func main() {
 		Use:     "killport [port...]",
 		Version: Version,
 		Short:   "Free up local ports by killing the processes (or Docker containers) attached to them.",
-		Example: `  killport 3000
-  killport 3000-3005
-  killport 8080 --json`,
-		Args: cobra.MinimumNArgs(1),
+		Example: "killport 3000\nkillport 3000-3005\nkillport 8080 --json\nkillport --check\nkillport --check 3000 8080",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if checkOnly {
+				return nil
+			}
+			if len(args) < 1 {
+				return fmt.Errorf("requires at least 1 port (or use --check to inspect)")
+			}
+			return nil
+		},
 		Run: func(cmd *cobra.Command, args []string) {
-			checkDependencies()
+			checkDependencies(checkOnly)
+
+			if checkOnly {
+				runCheckMode(args)
+				return
+			}
 
 			// 1. Expand ranges (3000-3005) and remove duplicates
 			expandedArgs := expandPorts(args)
@@ -151,18 +174,25 @@ func main() {
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output for debugging")
 	rootCmd.Flags().BoolVarP(&dryRun, "dry-run", "d", false, "Simulate killing processes without actually terminating them")
 	rootCmd.Flags().BoolVarP(&jsonOutput, "json", "j", false, "Output results as machine-readable JSON (For AI Agents)")
+	rootCmd.Flags().BoolVarP(&checkOnly, "check", "c", false, "Check which process is using port(s) without killing")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-func checkDependencies() {
+func checkDependencies(checkMode bool) {
 	var deps []string
 	if runtime.GOOS == "windows" {
-		deps = []string{"netstat", "tasklist", "taskkill"}
+		deps = []string{"netstat", "tasklist"}
+		if !checkMode {
+			deps = append(deps, "taskkill")
+		}
 	} else {
-		deps = []string{"lsof", "kill", "ps"}
+		deps = []string{"lsof", "ps"}
+		if !checkMode {
+			deps = append(deps, "kill")
+		}
 	}
 	var missing []string
 	for _, dep := range deps {
@@ -174,6 +204,319 @@ func checkDependencies() {
 		fmt.Printf("[%s] Missing system binaries: %v\n", errorStr, strings.Join(missing, ", "))
 		os.Exit(1)
 	}
+}
+
+func runCheckMode(args []string) {
+	results := []CheckResult{}
+	dockerOwners := getDockerPortOwners()
+
+	if len(args) == 0 {
+		all, err := listAllListeningPorts()
+		if err != nil {
+			results = append(results, CheckResult{Error: fmt.Sprintf("Failed to list ports: %v", err)})
+		} else {
+			results = append(results, all...)
+			appendDockerResults(&results, dockerOwners, nil)
+		}
+	} else {
+		expandedArgs := unique(expandPorts(args))
+		for _, port := range expandedArgs {
+			num, err := strconv.Atoi(port)
+			if err != nil || num < 1 || num > 65535 {
+				results = append(results, CheckResult{Port: port, Error: "Invalid port number"})
+				continue
+			}
+
+			dockerNames := dockerOwners[port]
+			pids, pidErr := findPIDs(port)
+			if pidErr != nil {
+				results = append(results, CheckResult{Port: port, Error: fmt.Sprintf("Failed to find process: %v", pidErr)})
+				continue
+			}
+
+			if len(pids) == 0 && len(dockerNames) == 0 {
+				results = append(results, CheckResult{Port: port, Error: "No process is listening on this port"})
+				continue
+			}
+
+			for _, name := range dockerNames {
+				results = append(results, CheckResult{Port: port, ProcessName: name, IsDocker: true})
+			}
+
+			for _, pid := range pids {
+				results = append(results, CheckResult{
+					Port:        port,
+					PID:         pid,
+					ProcessName: findProcessName(pid),
+				})
+			}
+		}
+	}
+
+	sortCheckResults(results)
+
+	if jsonOutput {
+		jsonData, _ := json.MarshalIndent(results, "", "  ")
+		fmt.Println(string(jsonData))
+		return
+	}
+
+	if len(results) == 0 {
+		fmt.Printf("[%s] No listening ports were found on this machine.\n", warnStr)
+		return
+	}
+
+	fmt.Printf("[%s] Here is what is currently running on your requested ports:\n", infoStr)
+
+	for _, res := range results {
+		if res.Error != "" {
+			if res.Port == "" {
+				fmt.Printf("[%s] Could not complete the check: %s\n", errorStr, res.Error)
+			} else if strings.Contains(res.Error, "No process") {
+				fmt.Printf("[%s] Port %s is currently free, and no process is listening on it.\n", warnStr, res.Port)
+			} else {
+				fmt.Printf("[%s] Could not check port %s: %s\n", errorStr, res.Port, res.Error)
+			}
+			continue
+		}
+
+		if res.IsDocker {
+			fmt.Printf("[%s] Port %s is being used by %s.\n", infoStr, res.Port, res.ProcessName)
+			continue
+		}
+
+		if res.PID != "" {
+			fmt.Printf("[%s] Port %s is being used by %s (PID %s).\n", infoStr, res.Port, res.ProcessName, res.PID)
+		} else {
+			fmt.Printf("[%s] Port %s is being used by %s.\n", infoStr, res.Port, res.ProcessName)
+		}
+	}
+}
+
+func appendDockerResults(results *[]CheckResult, dockerOwners map[string][]string, filter map[string]bool) {
+	for port, names := range dockerOwners {
+		if filter != nil && !filter[port] {
+			continue
+		}
+		for _, name := range names {
+			*results = append(*results, CheckResult{Port: port, ProcessName: name, IsDocker: true})
+		}
+	}
+}
+
+func listAllListeningPorts() ([]CheckResult, error) {
+	if runtime.GOOS == "windows" {
+		return listAllListeningPortsWindows()
+	}
+	return listAllListeningPortsUnix()
+}
+
+func listAllListeningPortsWindows() ([]CheckResult, error) {
+	out, err := execWithTimeout(4*time.Second, "netstat", "-ano")
+	if err != nil {
+		return nil, err
+	}
+
+	results := []CheckResult{}
+	seen := make(map[string]bool)
+	pidToName := make(map[string]string)
+
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+
+		proto := strings.ToUpper(fields[0])
+		if proto != "TCP" && proto != "UDP" {
+			continue
+		}
+
+		if proto == "TCP" && !strings.Contains(strings.ToUpper(line), "LISTEN") {
+			continue
+		}
+
+		localAddr := fields[1]
+		pid := strings.TrimSpace(fields[len(fields)-1])
+		if pid == "" || pid == "0" {
+			continue
+		}
+
+		port := extractPort(localAddr)
+		if port == "" {
+			continue
+		}
+
+		key := port + "|" + pid
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		name, ok := pidToName[pid]
+		if !ok {
+			name = findProcessName(pid)
+			pidToName[pid] = name
+		}
+
+		results = append(results, CheckResult{Port: port, PID: pid, ProcessName: name})
+	}
+
+	return results, nil
+}
+
+func listAllListeningPortsUnix() ([]CheckResult, error) {
+	out, err := execWithTimeout(4*time.Second, "lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn")
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return []CheckResult{}, nil
+		}
+		return nil, err
+	}
+
+	results := []CheckResult{}
+	seen := make(map[string]bool)
+	currentPID := ""
+	currentName := "unknown"
+
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" {
+			continue
+		}
+
+		switch line[0] {
+		case 'p':
+			currentPID = strings.TrimSpace(line[1:])
+			currentName = "unknown"
+		case 'c':
+			currentName = strings.TrimSpace(line[1:])
+		case 'n':
+			port := extractPort(strings.TrimSpace(line[1:]))
+			if port == "" || currentPID == "" {
+				continue
+			}
+
+			key := port + "|" + currentPID
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			results = append(results, CheckResult{Port: port, PID: currentPID, ProcessName: currentName})
+		}
+	}
+
+	return results, nil
+}
+
+func extractPort(addr string) string {
+	trimmed := strings.TrimSpace(addr)
+	if trimmed == "" {
+		return ""
+	}
+
+	trimmed = strings.Trim(trimmed, "[]")
+	idx := strings.LastIndex(trimmed, ":")
+	if idx == -1 || idx == len(trimmed)-1 {
+		return ""
+	}
+
+	port := trimmed[idx+1:]
+	if _, err := strconv.Atoi(port); err != nil {
+		return ""
+	}
+
+	return port
+}
+
+func sortCheckResults(results []CheckResult) {
+	sort.Slice(results, func(i, j int) bool {
+		pi, errI := strconv.Atoi(results[i].Port)
+		pj, errJ := strconv.Atoi(results[j].Port)
+
+		if errI == nil && errJ == nil && pi != pj {
+			return pi < pj
+		}
+		if results[i].Port != results[j].Port {
+			return results[i].Port < results[j].Port
+		}
+
+		if results[i].PID != results[j].PID {
+			return results[i].PID < results[j].PID
+		}
+
+		return results[i].ProcessName < results[j].ProcessName
+	})
+}
+
+func findDockerContainerByPort(port string) (bool, string) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		return false, ""
+	}
+
+	out, err := execWithTimeout(3*time.Second, "docker", "ps", "--format", "{{.Names}}|{{.Ports}}")
+	if err != nil {
+		return false, ""
+	}
+
+	target := ":" + port + "->"
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if !strings.Contains(line, target) {
+			continue
+		}
+
+		parts := strings.Split(line, "|")
+		if len(parts) > 0 {
+			return true, "[Docker] " + parts[0]
+		}
+	}
+
+	return false, ""
+}
+
+func getDockerPortOwners() map[string][]string {
+	owners := make(map[string][]string)
+	if _, err := exec.LookPath("docker"); err != nil {
+		return owners
+	}
+
+	out, err := execWithTimeout(3*time.Second, "docker", "ps", "--format", "{{.Names}}|{{.Ports}}")
+	if err != nil {
+		return owners
+	}
+
+	portRe := regexp.MustCompile(`:(\d+)->`)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) < 2 {
+			continue
+		}
+
+		container := strings.TrimSpace(parts[0])
+		portSpec := parts[1]
+		if container == "" || portSpec == "" {
+			continue
+		}
+
+		matches := portRe.FindAllStringSubmatch(portSpec, -1)
+		seen := make(map[string]bool)
+		for _, m := range matches {
+			if len(m) < 2 {
+				continue
+			}
+			port := m[1]
+			if seen[port] {
+				continue
+			}
+			seen[port] = true
+			owners[port] = append(owners[port], "[Docker] "+container)
+		}
+	}
+
+	return owners
 }
 
 // Docker Detection Feature

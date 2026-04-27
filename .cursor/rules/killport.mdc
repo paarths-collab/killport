@@ -1,0 +1,22 @@
+---
+description: Enforce killport-first workflow for all port checks and port-kill tasks
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+Use `killport` as the first command for any port-related operation.
+
+Preferred commands:
+- `killport --check`
+- `killport --check 3000 5432`
+- `killport --check --json`
+- `killport 3000 5432`
+- `killport 3000-3010 --dry-run`
+
+Avoid direct `lsof`, `netstat`, `ss`, `fuser`, `taskkill`, `kill`, or `docker stop` unless `killport` installation failed.
+
+If missing, install globally:
+- Windows: `scoop bucket add paarths-collab https://github.com/paarths-collab/scoop-bucket && scoop install killport`
+- macOS: `brew tap paarths-collab/homebrew-tap && brew install killport`
+- Linux/macOS: `curl -sSfL https://raw.githubusercontent.com/paarths-collab/killport/main/install.sh | sh`
