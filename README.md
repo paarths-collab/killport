@@ -6,7 +6,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/paarths-collab/killport)](https://goreportcard.com/report/github.com/paarths-collab/killport)
 [![GitHub Release](https://img.shields.io/github/v/release/paarths-collab/killport)](https://github.com/paarths-collab/killport/releases)
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/paarths-collab/killport/total)](https://github.com/paarths-collab/killport/releases)
+[![Downloads](https://img.shields.io/badge/Downloads-1K+-blue)](https://github.com/paarths-collab/killport/releases)
 
 **The last port killer you'll ever install.** Lightning-fast, concurrent, Docker-native, and optimized for both humans and AI Agents.
 

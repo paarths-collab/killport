@@ -40,7 +40,10 @@ type CheckResult struct {
 	Port        string `json:"port"`
 	ProcessName string `json:"process_name,omitempty"`
 	PID         string `json:"pid,omitempty"`
+	Category    string `json:"category,omitempty"`
+	SafeToKill  bool   `json:"safe_to_kill"`
 	IsDocker    bool   `json:"is_docker,omitempty"`
+	NoListener  bool   `json:"no_listener,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 
@@ -77,6 +80,11 @@ func addResult(res KillResult) {
 			fmt.Printf("[%s] Killed port %s — %s\n", successStr, res.Port, processInfo)
 		}
 	}
+}
+
+type checkBucket struct {
+	name    string
+	entries []CheckResult
 }
 
 func debugLog(format string, args ...interface{}) {
@@ -235,25 +243,32 @@ func runCheckMode(args []string) {
 			}
 
 			if len(pids) == 0 && len(dockerNames) == 0 {
-				results = append(results, CheckResult{Port: port, Error: "No process is listening on this port"})
+				results = append(results, CheckResult{Port: port, NoListener: true})
 				continue
 			}
 
 			for _, name := range dockerNames {
-				results = append(results, CheckResult{Port: port, ProcessName: name, IsDocker: true})
+				cat := classifyProcess(name, true)
+				results = append(results, CheckResult{Port: port, ProcessName: name, Category: cat, IsDocker: true})
 			}
 
 			for _, pid := range pids {
+				pname := findProcessName(pid)
+				pcat := classifyProcess(pname, false)
 				results = append(results, CheckResult{
 					Port:        port,
 					PID:         pid,
-					ProcessName: findProcessName(pid),
+					ProcessName: pname,
+					Category:    pcat,
 				})
 			}
 		}
 	}
 
 	sortCheckResults(results)
+
+	// Ensure each entry has a category and safe-to-kill flag
+	setSafeFlags(results)
 
 	if jsonOutput {
 		jsonData, _ := json.MarshalIndent(results, "", "  ")
@@ -267,29 +282,44 @@ func runCheckMode(args []string) {
 	}
 
 	fmt.Printf("[%s] Here is what is currently running on your requested ports:\n", infoStr)
+	buckets := groupCheckResults(results)
+
+	for _, bucket := range buckets {
+		if len(bucket.entries) == 0 {
+			continue
+		}
+
+		fmt.Printf("[%s] %s (%d):\n", infoStr, bucket.name, len(bucket.entries))
+		for _, res := range bucket.entries {
+			if res.PID != "" {
+				safe := "unsafe to kill"
+				if res.SafeToKill {
+					safe = "safe to kill"
+				}
+				fmt.Printf("[%s] Port %s is being used by %s (PID %s) — %s.\n", infoStr, res.Port, res.ProcessName, res.PID, safe)
+			} else {
+				safe := "unsafe to kill"
+				if res.SafeToKill {
+					safe = "safe to kill"
+				}
+				fmt.Printf("[%s] Port %s is being used by %s — %s.\n", infoStr, res.Port, res.ProcessName, safe)
+			}
+		}
+	}
 
 	for _, res := range results {
-		if res.Error != "" {
-			if res.Port == "" {
-				fmt.Printf("[%s] Could not complete the check: %s\n", errorStr, res.Error)
-			} else if strings.Contains(res.Error, "No process") {
-				fmt.Printf("[%s] Port %s is currently free, and no process is listening on it.\n", warnStr, res.Port)
-			} else {
-				fmt.Printf("[%s] Could not check port %s: %s\n", errorStr, res.Port, res.Error)
-			}
+		if res.Error == "" && !res.NoListener {
 			continue
 		}
-
-		if res.IsDocker {
-			fmt.Printf("[%s] Port %s is being used by %s.\n", infoStr, res.Port, res.ProcessName)
+		if res.NoListener {
+			fmt.Printf("[%s] Port %s is currently free, and no process is listening on it.\n", warnStr, res.Port)
 			continue
 		}
-
-		if res.PID != "" {
-			fmt.Printf("[%s] Port %s is being used by %s (PID %s).\n", infoStr, res.Port, res.ProcessName, res.PID)
-		} else {
-			fmt.Printf("[%s] Port %s is being used by %s.\n", infoStr, res.Port, res.ProcessName)
+		if res.Port == "" {
+			fmt.Printf("[%s] Could not complete the check: %s\n", errorStr, res.Error)
+			continue
 		}
+		fmt.Printf("[%s] Could not check port %s: %s\n", errorStr, res.Port, res.Error)
 	}
 }
 
@@ -299,7 +329,7 @@ func appendDockerResults(results *[]CheckResult, dockerOwners map[string][]strin
 			continue
 		}
 		for _, name := range names {
-			*results = append(*results, CheckResult{Port: port, ProcessName: name, IsDocker: true})
+			*results = append(*results, CheckResult{Port: port, ProcessName: name, Category: classifyProcess(name, true), IsDocker: true})
 		}
 	}
 }
@@ -359,7 +389,7 @@ func listAllListeningPortsWindows() ([]CheckResult, error) {
 			pidToName[pid] = name
 		}
 
-		results = append(results, CheckResult{Port: port, PID: pid, ProcessName: name})
+		results = append(results, CheckResult{Port: port, PID: pid, ProcessName: name, Category: classifyProcess(name, false)})
 	}
 
 	return results, nil
@@ -402,6 +432,7 @@ func listAllListeningPortsUnix() ([]CheckResult, error) {
 			}
 			seen[key] = true
 			results = append(results, CheckResult{Port: port, PID: currentPID, ProcessName: currentName})
+			results[len(results)-1].Category = classifyProcess(currentName, false)
 		}
 	}
 
@@ -430,6 +461,12 @@ func extractPort(addr string) string {
 
 func sortCheckResults(results []CheckResult) {
 	sort.Slice(results, func(i, j int) bool {
+		ci := categoryRank(results[i].Category)
+		cj := categoryRank(results[j].Category)
+		if ci != cj {
+			return ci < cj
+		}
+
 		pi, errI := strconv.Atoi(results[i].Port)
 		pj, errJ := strconv.Atoi(results[j].Port)
 
@@ -446,6 +483,144 @@ func sortCheckResults(results []CheckResult) {
 
 		return results[i].ProcessName < results[j].ProcessName
 	})
+}
+
+func groupCheckResults(results []CheckResult) []checkBucket {
+	buckets := []checkBucket{
+		{name: "System processes"},
+		{name: "Application processes"},
+		{name: "Code and runtime processes"},
+	}
+
+	for _, res := range results {
+		if res.Error != "" {
+			continue
+		}
+		switch res.Category {
+		case "system":
+			buckets[0].entries = append(buckets[0].entries, res)
+		case "runtime":
+			buckets[2].entries = append(buckets[2].entries, res)
+		default:
+			buckets[1].entries = append(buckets[1].entries, res)
+		}
+	}
+
+	return buckets
+}
+
+func classifyProcess(processName string, isDocker bool) string {
+	if isDocker {
+		return "application"
+	}
+
+	name := strings.ToLower(strings.TrimSpace(processName))
+	if name == "" {
+		return "application"
+	}
+
+	if strings.HasPrefix(name, "[docker]") {
+		return "application"
+	}
+
+	systemHints := []string{
+		"system",
+		"svchost",
+		"services.exe",
+		"wininit",
+		"lsass",
+		"spoolsv",
+		"launchd",
+		"systemd",
+		"dbus-daemon",
+		"cupsd",
+		"cron",
+		"init",
+		"kthreadd",
+		"kworker",
+		"kernel_task",
+		"windowserver",
+	}
+	for _, hint := range systemHints {
+		if strings.Contains(name, hint) {
+			return "system"
+		}
+	}
+
+	runtimeHints := []string{
+		"python",
+		"python3",
+		"node",
+		"npm",
+		"npx",
+		"pnpm",
+		"yarn",
+		"bun",
+		"deno",
+		"uvicorn",
+		"gunicorn",
+		"django",
+		"flask",
+		"php",
+		"ruby",
+		"java",
+		"dotnet",
+		"go",
+		"cargo",
+		"rust",
+		"ts-node",
+		"vite",
+		"webpack",
+		"parcel",
+		"next",
+		"nuxt",
+		"antigravity",
+		"language_server",
+	}
+	for _, hint := range runtimeHints {
+		if strings.Contains(name, hint) {
+			return "runtime"
+		}
+	}
+
+	return "application"
+}
+
+func categoryRank(category string) int {
+	switch category {
+	case "system":
+		return 0
+	case "application":
+		return 1
+	case "runtime":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func safeToKill(category, pid string, isDocker bool) bool {
+	if isDocker {
+		return true
+	}
+	// Windows System PID is often 4, avoid killing it
+	if pid == "4" || pid == "0" {
+		return false
+	}
+	if category == "system" {
+		return false
+	}
+	return true
+}
+
+func setSafeFlags(results []CheckResult) {
+	for i := range results {
+		// ensure category exists
+		if results[i].Category == "" {
+			results[i].Category = classifyProcess(results[i].ProcessName, results[i].IsDocker)
+		}
+		results[i].SafeToKill = safeToKill(results[i].Category, results[i].PID, results[i].IsDocker)
+	}
 }
 
 func findDockerContainerByPort(port string) (bool, string) {
