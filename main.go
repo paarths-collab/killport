@@ -19,7 +19,7 @@ import (
 )
 
 var (
-	Version    = "1.1.1"
+	Version    = "1.1.0"
 	verbose    bool
 	dryRun     bool
 	jsonOutput bool
