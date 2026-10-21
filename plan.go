@@ -34,7 +34,39 @@ const (
 	sigTerm      = "SIGTERM"
 	sigKill      = "SIGKILL"
 	sigTerminate = "terminate"
+
+	// Provider modes (--mode).
+	modeAuto      = "auto"
+	modeNative    = "native"
+	modeContainer = "container"
+
+	reasonContainerPublishes = "port is published by a container; use --mode container"
+	reasonNativeOwner        = "owned by a native process; use --mode native or auto"
 )
+
+// modeUsage is the help text of --mode.
+const modeUsage = "Provider mode: auto (default; containers and native processes), native (only native processes are planned) or container (only containers are planned)"
+
+// parseModeFlag validates the value of the --mode flag (which must be given
+// explicitly if present).
+func parseModeFlag(m string) (string, *cliError) {
+	if m == "" {
+		return "", usageErr("invalid --mode \"\": expected auto, native or container")
+	}
+	return parseMode(m)
+}
+
+// parseMode validates a mode value. "" (a plan from before modes existed)
+// means auto.
+func parseMode(m string) (string, *cliError) {
+	switch m {
+	case "", modeAuto:
+		return modeAuto, nil
+	case modeNative, modeContainer:
+		return m, nil
+	}
+	return "", usageErr(fmt.Sprintf("invalid --mode %q: expected auto, native or container", m))
+}
 
 // Exit classes of the opt-in workflow.
 const (
@@ -87,13 +119,17 @@ func worseExit(a, b int) int {
 // planDoc is the plan document. It deliberately contains no hostnames,
 // usernames, command lines or paths.
 type planDoc struct {
-	SchemaVersion   int            `json:"schema_version"`
-	Kind            string         `json:"kind"`
-	PlanID          string         `json:"plan_id"`
-	ToolVersion     string         `json:"tool_version"`
-	OS              string         `json:"os"`
-	CreatedAt       string         `json:"created_at"`
-	ExpiresAt       string         `json:"expires_at"`
+	SchemaVersion int    `json:"schema_version"`
+	Kind          string `json:"kind"`
+	PlanID        string `json:"plan_id"`
+	ToolVersion   string `json:"tool_version"`
+	OS            string `json:"os"`
+	CreatedAt     string `json:"created_at"`
+	ExpiresAt     string `json:"expires_at"`
+	// ObservationID identifies the observation the plan was built from (see
+	// observationID); DockerContext is the DOCKER_CONTEXT it ran under.
+	ObservationID   string         `json:"observation_id,omitempty"`
+	DockerContext   string         `json:"docker_context,omitempty"`
 	Request         planRequest    `json:"request"`
 	Endpoints       []planEndpoint `json:"endpoints"`
 	Resources       []planResource `json:"resources"`
@@ -107,6 +143,7 @@ type planDoc struct {
 type planRequest struct {
 	Protocol     string `json:"protocol"`
 	Scope        string `json:"scope"`
+	Mode         string `json:"mode,omitempty"` // auto | native | container; "" in older plans means auto
 	Ports        []int  `json:"ports"`
 	Force        bool   `json:"force"`
 	GraceSeconds int    `json:"grace_seconds"`
@@ -119,6 +156,8 @@ type planEndpoint struct {
 	Occupied   bool          `json:"occupied"`
 	Resources  []string      `json:"resources"`
 	Refused    []planRefusal `json:"refused"`
+	// ProviderErrors are the observation failures that bear on this endpoint.
+	ProviderErrors []providerError `json:"provider_errors"`
 }
 
 // planResource is one thing apply may act on: a native process (bound to its
@@ -148,6 +187,7 @@ type planRefusal struct {
 // planOptions are the parsed flags of `killport plan`.
 type planOptions struct {
 	Protocol string
+	Mode     string
 	Ports    []int
 	Force    bool
 	Grace    time.Duration
@@ -179,6 +219,7 @@ func computePlanID(doc planDoc) string {
 
 // buildPlan turns one observation into a plan. It never mutates anything.
 func buildPlan(sys system, snap *snapshot, opts planOptions, now time.Time) *planDoc {
+	mode, _ := parseMode(opts.Mode)
 	doc := &planDoc{
 		SchemaVersion: planSchemaVersion,
 		Kind:          planKind,
@@ -186,9 +227,11 @@ func buildPlan(sys system, snap *snapshot, opts planOptions, now time.Time) *pla
 		OS:            sys.GOOS(),
 		CreatedAt:     formatTime(now),
 		ExpiresAt:     formatTime(now.Add(opts.TTL)),
+		DockerContext: snap.dockerContext,
 		Request: planRequest{
 			Protocol:     opts.Protocol,
 			Scope:        scopeFor(opts.Protocol),
+			Mode:         mode,
 			Ports:        append([]int{}, opts.Ports...),
 			Force:        opts.Force,
 			GraceSeconds: graceSeconds(opts.Grace),
@@ -207,9 +250,14 @@ func buildPlan(sys system, snap *snapshot, opts planOptions, now time.Time) *pla
 
 	byID := map[string]*planResource{}
 	seenRefusal := map[planRefusal]bool{}
+	observed := make([]endpointObs, 0, len(opts.Ports))
 	for _, port := range opts.Ports {
 		e := snap.endpoint(port)
-		pe := planEndpoint{Protocol: e.Protocol, Port: port, Visibility: e.Visibility, Occupied: e.Occupied, Resources: []string{}, Refused: []planRefusal{}}
+		observed = append(observed, e)
+		pe := planEndpoint{
+			Protocol: e.Protocol, Port: port, Visibility: e.Visibility, Occupied: e.Occupied, Resources: []string{}, Refused: []planRefusal{},
+			ProviderErrors: append([]providerError{}, e.ProviderErrors...),
+		}
 
 		use := func(r planResource) {
 			cur := byID[r.ResourceID]
@@ -232,6 +280,12 @@ func buildPlan(sys system, snap *snapshot, opts planOptions, now time.Time) *pla
 		}
 
 		for _, c := range e.Containers {
+			if mode == modeNative {
+				// Still an occupant (the endpoint is never called free), but
+				// native mode never acts on containers.
+				refuse(0, c.Name, reasonContainerPublishes)
+				continue
+			}
 			if !c.FullID {
 				refuse(0, c.Name, fmt.Sprintf("docker reported the container id %q, which is not a full 64-hex id; cannot bind the action to an immutable id", c.ID))
 				continue
@@ -243,6 +297,10 @@ func buildPlan(sys system, snap *snapshot, opts planOptions, now time.Time) *pla
 		}
 		for _, o := range e.Owners {
 			l := Listener{Port: port, PID: o.PID, Process: o.Name}
+			if isDockerInfra(o.Name) && mode == modeNative {
+				refuse(o.PID, o.Name, reasonContainerPublishes)
+				continue
+			}
 			if isDockerInfra(o.Name) {
 				if len(e.Containers) > 0 {
 					continue // freed by stopping the container that publishes the port
@@ -250,11 +308,15 @@ func buildPlan(sys system, snap *snapshot, opts planOptions, now time.Time) *pla
 				reason := fmt.Sprintf("port %d is held by Docker infrastructure (%s, PID %d); stop the container that publishes it instead", port, o.Name, o.PID)
 				switch {
 				case snap.dockerErr != nil:
-					reason += "; the owning container is unknown because " + snap.dockerErr.Error()
+					reason += "; the owning container is unknown because " + scrubText(snap.dockerErr.Error())
 				case !snap.dockerAvail:
 					reason += "; docker was not found on PATH"
 				}
 				refuse(o.PID, o.Name, reason)
+				continue
+			}
+			if mode == modeContainer {
+				refuse(o.PID, o.Name, reasonNativeOwner)
 				continue
 			}
 			if reason := protectedReason(sys, l); reason != "" {
@@ -272,11 +334,11 @@ func buildPlan(sys system, snap *snapshot, opts planOptions, now time.Time) *pla
 					StartTime: o.StartTime, IdentityStrength: o.Strength, Action: actionSignal, Signal: signal,
 				})
 			case identDenied:
-				refuse(o.PID, o.Name, fmt.Sprintf("cannot bind process identity: permission denied (%v); try again with sudo / as Administrator", o.IdentErr))
+				refuse(o.PID, o.Name, fmt.Sprintf("cannot bind process identity: permission denied (%v); try again with sudo / as Administrator", scrubText(o.IdentErr.Error())))
 			default:
 				msg := "cannot bind process identity"
 				if o.IdentErr != nil {
-					msg += ": " + o.IdentErr.Error()
+					msg += ": " + scrubText(o.IdentErr.Error())
 				}
 				refuse(o.PID, o.Name, msg)
 			}
@@ -313,6 +375,7 @@ func buildPlan(sys system, snap *snapshot, opts planOptions, now time.Time) *pla
 		}
 		return a.Reason < b.Reason
 	})
+	doc.ObservationID = observationID(doc.Request, observed, snap.dockerContext)
 	doc.ExitClass = exitClassName(planClass(doc))
 	doc.PlanID = computePlanID(*doc)
 	return doc
@@ -381,6 +444,10 @@ func validatePlan(doc *planDoc) error {
 	if req.Scope != scopeFor(req.Protocol) {
 		return bad("scope %q does not match protocol %q", req.Scope, req.Protocol)
 	}
+	mode, merr := parseMode(req.Mode)
+	if merr != nil {
+		return bad("unsupported mode %q", req.Mode)
+	}
 	if req.GraceSeconds < 0 || time.Duration(req.GraceSeconds)*time.Second > maxGrace {
 		return bad("grace_seconds %d is out of range", req.GraceSeconds)
 	}
@@ -416,6 +483,9 @@ func validatePlan(doc *planDoc) error {
 		}
 		switch r.Provider {
 		case providerNative:
+			if mode == modeContainer {
+				return bad("resource %q is a native process but the plan's mode is %q", r.ResourceID, mode)
+			}
 			if r.PID <= 1 {
 				return bad("resource %q targets protected PID %d", r.ResourceID, r.PID)
 			}
@@ -442,6 +512,9 @@ func validatePlan(doc *planDoc) error {
 				return bad("resource %q has signal %q, expected %q", r.ResourceID, r.Signal, want)
 			}
 		case providerDocker:
+			if mode == modeNative {
+				return bad("resource %q is a container but the plan's mode is %q", r.ResourceID, mode)
+			}
 			if !isFullContainerID(r.ContainerID) {
 				return bad("resource %q has an invalid container id", r.ResourceID)
 			}

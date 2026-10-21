@@ -2,12 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // This file is the observation layer of the opt-in inspect / plan / apply
@@ -92,6 +98,9 @@ type endpointObs struct {
 	Hidden     bool
 	Owners     []ownerObs // attributed native processes, ascending PID
 	Containers []containerObs
+	// ProviderErrors are the provider failures that bear on this endpoint
+	// (sanitised, sorted, de-duplicated). Never nil after endpoint().
+	ProviderErrors []providerError
 }
 
 // snapshot is one complete observation pass, independent of which ports are
@@ -115,6 +124,14 @@ type snapshot struct {
 
 	idents   map[int]ownerObs
 	warnings []string
+
+	// dockerContext is the DOCKER_CONTEXT environment variable (sanitised),
+	// "" when unset. killport never shells out to read Docker's contexts and
+	// never records DOCKER_HOST.
+	dockerContext string
+	// perrs are the provider failures seen while collecting. Unlike
+	// warnings they are structured and path/user sanitised.
+	perrs []scopedProviderError
 }
 
 // collect gathers the socket table, the owners, Docker and the process
@@ -122,6 +139,7 @@ type snapshot struct {
 // fails as a whole: each provider failure is recorded on the snapshot.
 func collect(ctx context.Context, sys system, protocol string) *snapshot {
 	s := &snapshot{goos: sys.GOOS(), protocol: protocol, tableHas: map[int]bool{}, dockerIDs: map[string]bool{}, idents: map[int]ownerObs{}}
+	s.dockerContext = sanitizeProviderText(strings.TrimSpace(os.Getenv("DOCKER_CONTEXT")))
 	if s.goos == "windows" {
 		s.collectWindows(ctx, sys)
 	} else {
@@ -139,6 +157,14 @@ func (s *snapshot) warn(format string, args ...any) {
 
 // ---- socket table ---------------------------------------------------------
 
+// tableProvider names the socket-table source for the platform.
+func (s *snapshot) tableProvider() string {
+	if s.goos == "linux" {
+		return provProc
+	}
+	return provNetstat
+}
+
 func (s *snapshot) collectTable(ctx context.Context, sys system) {
 	var (
 		entries []sockEntry
@@ -152,6 +178,9 @@ func (s *snapshot) collectTable(ctx context.Context, sys system) {
 		out, err = runTool(ctx, sys, toolTimeout, "netstat", "-an", "-p", s.protocol)
 		if err == nil {
 			entries, err = parseMacNetstat(out, s.protocol)
+			if err != nil {
+				err = &parseError{err}
+			}
 		} else {
 			err = fmt.Errorf("netstat failed: %w", err)
 		}
@@ -161,6 +190,7 @@ func (s *snapshot) collectTable(ctx context.Context, sys system) {
 	if err != nil {
 		s.tableErr = err
 		s.warn("socket table unavailable: %v", err)
+		s.addProviderError(s.tableProvider(), err, false)
 		return
 	}
 	s.tableOK = true
@@ -185,7 +215,7 @@ func readProcTables(sys system, protocol string) ([]sockEntry, error) {
 		}
 		es, perr := parseProcNet(data, protocol, v6)
 		if perr != nil {
-			return nil, fmt.Errorf("%s: %w", path, perr)
+			return nil, &parseError{fmt.Errorf("%s: %w", path, perr)}
 		}
 		all = append(all, es...)
 	}
@@ -208,6 +238,9 @@ func (s *snapshot) collectOwnersUnix(ctx context.Context, sys system) {
 				return nil, "", fmt.Errorf("ss failed: %w", err)
 			}
 			l, perr := parseSSUDP(out)
+			if perr != nil {
+				perr = &parseError{perr}
+			}
 			return l, "", perr
 		}
 	} else {
@@ -218,27 +251,41 @@ func (s *snapshot) collectOwnersUnix(ctx context.Context, sys system) {
 		}
 	}
 	var (
-		ls   []Listener
-		warn string
-		err  error
+		ls       []Listener
+		warn     string
+		err      error
+		warnProv = provLsof
 	)
 	switch {
 	case haveLsof:
 		ls, warn, err = viaLsof()
-		if err != nil && haveSS {
-			lerr := err
-			if sls, sw, serr := viaSS(); serr == nil {
-				ls, warn, err = sls, sw, nil
-				s.warn("lsof failed (%v); owners come from ss and may be incomplete", lerr)
+		if err != nil {
+			s.addProviderError(provLsof, err, false)
+			if haveSS {
+				lerr := err
+				sls, sw, serr := viaSS()
+				if serr == nil {
+					ls, warn, err = sls, sw, nil
+					warnProv = provSS
+					s.warn("lsof failed (%v); owners come from ss and may be incomplete", lerr)
+				} else {
+					s.addProviderError(provSS, serr, false)
+				}
 			}
 		}
 	case haveSS:
 		ls, warn, err = viaSS()
+		warnProv = provSS
+		if err != nil {
+			s.addProviderError(provSS, err, false)
+		}
 	default:
 		err = errors.New("no supported port inspection tool found (need lsof)")
+		s.addProviderError(provLsof, err, false)
 	}
 	if warn != "" {
 		s.warn("%s", warn)
+		s.addProviderError(warnProv, errors.New(warn), false)
 	}
 	if err != nil {
 		s.ownerErr = err
@@ -273,7 +320,7 @@ func listLsofUDP(ctx context.Context, sys system) ([]Listener, string, error) {
 	}
 	ls, perr := parseLsofUDP(out)
 	if perr != nil {
-		return nil, "", fmt.Errorf("lsof: %w", perr)
+		return nil, "", &parseError{fmt.Errorf("lsof: %w", perr)}
 	}
 	return ls, "", nil
 }
@@ -359,6 +406,7 @@ func (s *snapshot) collectWindows(ctx context.Context, sys system) {
 		s.ownerErr = err
 		s.tableErr = err
 		s.warn("%v", err)
+		s.addProviderError(provNetstat, err, false)
 		return
 	}
 	rows := parseNetstatRows(string(out), s.protocol)
@@ -378,6 +426,7 @@ func (s *snapshot) collectWindows(ctx context.Context, sys system) {
 	if terr != nil {
 		s.namesUnavailable = true
 		s.warn("tasklist failed (%v); process names are unavailable and owners will not be signalled", terr)
+		s.addProviderError(provTasklist, terr, true)
 		return
 	}
 	names := parseTasklist(string(tout))
@@ -397,6 +446,7 @@ func (s *snapshot) collectDocker(ctx context.Context, sys system) {
 	if err != nil {
 		s.dockerErr = fmt.Errorf("docker ps failed: %w", err)
 		s.warn("could not query Docker (%v); Docker-published ports may be missing from the results", err)
+		s.addProviderError(provDocker, err, false)
 		return
 	}
 	s.containers = parseDockerPSFull(string(out), s.protocol)
@@ -534,7 +584,50 @@ func (s *snapshot) endpoint(port int) endpointObs {
 	e.Unattributed = e.Hidden || deniedActionable
 	e.Occupied = e.TableOccupied || len(e.Owners) > 0 || len(e.Containers) > 0 || hiddenRow
 	e.Visibility = s.visibility(&e)
+	e.ProviderErrors = s.endpointProviderErrors(&e, explained)
 	return e
+}
+
+// endpointProviderErrors lists the provider failures that bear on one
+// endpoint: the snapshot-wide ones, plus the identity lookups of its owners
+// that failed for a reason other than the process having exited.
+func (s *snapshot) endpointProviderErrors(e *endpointObs, explained bool) []providerError {
+	res := []providerError{}
+	add := func(pe providerError) {
+		for _, x := range res {
+			if x == pe {
+				return
+			}
+		}
+		res = append(res, pe)
+	}
+	for _, sp := range s.perrs {
+		if sp.ownersOnly && len(e.Owners) == 0 {
+			continue
+		}
+		add(sp.providerError)
+	}
+	for _, o := range e.Owners {
+		if o.IdentErr == nil || (o.Ident != identDenied && o.Ident != identNone) {
+			continue
+		}
+		if explained && isDockerInfra(o.Name) {
+			continue // the container is what gets acted on; the proxy's identity is irrelevant
+		}
+		err := fmt.Errorf("cannot read the identity of pid %d: %w", o.PID, o.IdentErr)
+		add(newProviderError(provProc, providerCategory(err), err.Error()))
+	}
+	sort.Slice(res, func(i, j int) bool {
+		a, b := res[i], res[j]
+		if a.Provider != b.Provider {
+			return a.Provider < b.Provider
+		}
+		if a.Category != b.Category {
+			return a.Category < b.Category
+		}
+		return a.Message < b.Message
+	})
+	return res
 }
 
 // visibility implements the precedence in the design: provider_unavailable,
@@ -592,4 +685,193 @@ func (s *snapshot) endpoints(ports []int) []endpointObs {
 // providerFailed reports whether an owner or Docker provider failed outright.
 func (s *snapshot) providerFailed() bool {
 	return s.ownerErr != nil || s.dockerErr != nil || s.namesUnavailable
+}
+
+// ---- provider errors ---------------------------------------------------------
+
+// Providers and failure categories reported in provider_errors.
+const (
+	provDocker   = "docker"
+	provLsof     = "lsof"
+	provSS       = "ss"
+	provNetstat  = "netstat"
+	provTasklist = "tasklist"
+	provProc     = "proc"
+
+	catUnavailable = "unavailable"
+	catTimeout     = "timeout"
+	catPermission  = "permission"
+	catFailed      = "failed"
+	catParse       = "parse"
+
+	maxProviderMessage = 200
+)
+
+// providerError is one failed observation source, as it appears in the
+// inspect / plan / apply documents. Messages are sanitised: no absolute
+// paths, hostnames or user names, at most 200 characters.
+type providerError struct {
+	Provider string `json:"provider"`
+	Category string `json:"category"`
+	Message  string `json:"message"`
+}
+
+// scopedProviderError is a snapshot-level provider failure. ownersOnly marks
+// failures that only matter to endpoints that have native owners (tasklist).
+type scopedProviderError struct {
+	providerError
+	ownersOnly bool
+}
+
+// parseError marks an error produced while parsing a provider's output (as
+// opposed to running it). Its text is the wrapped error's text.
+type parseError struct{ err error }
+
+func (e *parseError) Error() string { return e.err.Error() }
+func (e *parseError) Unwrap() error { return e.err }
+
+// providerCategory classifies a provider failure: parse, timeout, permission,
+// unavailable (the tool, file or daemon is not there) or failed.
+func providerCategory(err error) string {
+	var pe *parseError
+	switch {
+	case errors.As(err, &pe):
+		return catParse
+	case errors.Is(err, context.DeadlineExceeded):
+		return catTimeout
+	case looksLikePermission(err):
+		return catPermission
+	case looksUnavailable(err):
+		return catUnavailable
+	}
+	return catFailed
+}
+
+func looksUnavailable(err error) bool {
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if code, ok := exitCodeOf(err); ok && code == 127 {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	for _, frag := range []string{
+		"executable file not found", "command not found", "no such file or directory",
+		"cannot connect to the docker daemon", "is the docker daemon running", "error during connect",
+		"connection refused", "no supported port inspection tool", "is not supported on",
+	} {
+		if strings.Contains(s, frag) {
+			return true
+		}
+	}
+	return false
+}
+
+func newProviderError(provider, category, msg string) providerError {
+	return providerError{Provider: provider, Category: category, Message: sanitizeProviderText(msg)}
+}
+
+// addProviderError records a failure of one provider on the snapshot
+// (de-duplicated).
+func (s *snapshot) addProviderError(provider string, err error, ownersOnly bool) {
+	sp := scopedProviderError{providerError: newProviderError(provider, providerCategory(err), err.Error()), ownersOnly: ownersOnly}
+	for _, x := range s.perrs {
+		if x == sp {
+			return
+		}
+	}
+	s.perrs = append(s.perrs, sp)
+}
+
+var (
+	// scheme://rest, e.g. unix:///var/run/docker.sock or tcp://10.0.0.5:2375.
+	urlRe = regexp.MustCompile(`\b([A-Za-z][A-Za-z0-9+.-]*)://[^\s"'<>)\]\x60,;]*`)
+	// A Windows drive path (C:\x, C:/x) or UNC path (\\host\share).
+	winPathRe = regexp.MustCompile(`(?:\b[A-Za-z]:[\\/]|\\\\)[^\s"'<>|)\]\x60,;]*`)
+	// An absolute Unix path: a "/" that starts a token (or follows one of
+	// the usual delimiters) and is followed by at least one more character.
+	unixPathRe = regexp.MustCompile(`(^|[\s"'(\[=,])/[^\s"'<>|)\]\x60,;]+`)
+)
+
+// sanitizeProviderText removes what must never leave the machine in a
+// document: URLs and hostnames and absolute paths (each becomes "<path>" or
+// "<host>"; user names normally appear only inside such paths, e.g.
+// /home/alice/...), and the result is at most 200 characters.
+func sanitizeProviderText(s string) string {
+	s = strings.Join(strings.Fields(scrubText(s)), " ")
+	if utf8.RuneCountInString(s) > maxProviderMessage {
+		r := []rune(s)
+		s = string(r[:maxProviderMessage-3]) + "..."
+	}
+	return s
+}
+
+// scrubText replaces URLs/hostnames and absolute paths; it does not shorten the text (used for text embedded in plan reasons).
+func scrubText(s string) string {
+	s = urlRe.ReplaceAllStringFunc(s, func(m string) string {
+		scheme, rest, _ := strings.Cut(m, "://")
+		if strings.HasPrefix(rest, "/") || scheme == "npipe" {
+			return scheme + ":<path>"
+		}
+		return scheme + "://<host>"
+	})
+	s = winPathRe.ReplaceAllString(s, "<path>")
+	s = unixPathRe.ReplaceAllString(s, "${1}<path>")
+	return s
+}
+
+// ---- observation id -----------------------------------------------------------
+
+type obsOwner struct {
+	PID       int    `json:"pid"`
+	Name      string `json:"name"`
+	StartTime string `json:"start_time,omitempty"`
+	Strength  string `json:"identity_strength,omitempty"`
+}
+
+type obsContainer struct {
+	ID   string `json:"container_id"`
+	Name string `json:"name"`
+}
+
+type obsEndpoint struct {
+	Protocol       string          `json:"protocol"`
+	Port           int             `json:"port"`
+	Visibility     string          `json:"visibility"`
+	Occupied       bool            `json:"occupied"`
+	Unattributed   bool            `json:"unattributed"`
+	Owners         []obsOwner      `json:"owners"`
+	Containers     []obsContainer  `json:"containers"`
+	ProviderErrors []providerError `json:"provider_errors"`
+}
+
+// observationID is "obs:" + the first 16 hex digits of sha256 over the
+// canonical observation (endpoints with owners, containers and provider
+// errors, plus the Docker context) and the request it answers. It contains no
+// time, so the same world and the same request always give the same id.
+func observationID(request any, eps []endpointObs, dockerContext string) string {
+	canon := struct {
+		Request       any           `json:"request"`
+		DockerContext string        `json:"docker_context"`
+		Endpoints     []obsEndpoint `json:"endpoints"`
+	}{Request: request, DockerContext: dockerContext, Endpoints: make([]obsEndpoint, 0, len(eps))}
+	for _, e := range eps {
+		oe := obsEndpoint{
+			Protocol: e.Protocol, Port: e.Port, Visibility: e.Visibility, Occupied: e.Occupied, Unattributed: e.Unattributed,
+			Owners: []obsOwner{}, Containers: []obsContainer{}, ProviderErrors: append([]providerError{}, e.ProviderErrors...),
+		}
+		for _, o := range e.Owners {
+			oe.Owners = append(oe.Owners, obsOwner{PID: o.PID, Name: o.Name, StartTime: o.StartTime, Strength: o.Strength})
+		}
+		for _, c := range e.Containers {
+			oe.Containers = append(oe.Containers, obsContainer{ID: c.ID, Name: c.Name})
+		}
+		canon.Endpoints = append(canon.Endpoints, oe)
+	}
+	data, err := json.Marshal(canon)
+	if err != nil {
+		panic("killport: cannot encode observation: " + err.Error())
+	}
+	sum := sha256.Sum256(data)
+	return "obs:" + hex.EncodeToString(sum[:])[:16]
 }

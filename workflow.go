@@ -34,7 +34,7 @@ func (a *app) commonFlags(cmd *cobra.Command) {
 }
 
 func (a *app) inspectCmd(exit *int) *cobra.Command {
-	var protocol string
+	var protocol, mode string
 	cmd := &cobra.Command{
 		Use:           "inspect [port...]",
 		Short:         "Observe who occupies ports, and how completely that can be seen (read-only)",
@@ -44,12 +44,13 @@ func (a *app) inspectCmd(exit *int) *cobra.Command {
 		Args:          cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a.workflow = true
-			code, err := a.runInspect(cmd.Context(), args, protocol)
+			code, err := a.runInspect(cmd.Context(), args, protocol, mode)
 			*exit = code
 			return err
 		},
 	}
 	cmd.Flags().StringVar(&protocol, "protocol", protoTCP, protocolUsage)
+	cmd.Flags().StringVar(&mode, "mode", modeAuto, modeUsage)
 	a.commonFlags(cmd)
 	return cmd
 }
@@ -60,7 +61,7 @@ func (a *app) planCmd(exit *int) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "plan <port...>",
 		Short:         "Write a plan of what would be stopped, bound to process identities (never changes anything)",
-		Example:       "killport plan 3000 -o plan.json\nkillport plan 3000 3001 --force --json\nkillport plan --protocol udp 5353",
+		Example:       "killport plan 3000 -o plan.json\nkillport plan 3000 3001 --force --json\nkillport plan --protocol udp 5353\nkillport plan 8080 --mode container",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          cobra.ArbitraryArgs,
@@ -72,6 +73,7 @@ func (a *app) planCmd(exit *int) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&opts.Protocol, "protocol", protoTCP, protocolUsage)
+	cmd.Flags().StringVar(&opts.Mode, "mode", modeAuto, modeUsage)
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "Plan SIGKILL instead of SIGTERM (Windows always terminates)")
 	cmd.Flags().DurationVar(&opts.TTL, "ttl", defaultPlanTTL, "How long the plan stays valid (max 24h)")
 	cmd.Flags().DurationVar(&opts.Grace, "grace", defaultGrace, "Docker stop grace period and how long apply waits for the endpoint to become free")
@@ -133,6 +135,10 @@ func (a *app) warnAll(ws []string) {
 	}
 }
 
+func providerErrorLine(pe providerError) string {
+	return fmt.Sprintf("%s %s: %s", pe.Provider, pe.Category, pe.Message)
+}
+
 // ---- inspect ---------------------------------------------------------------
 
 type inspectDoc struct {
@@ -141,6 +147,8 @@ type inspectDoc struct {
 	ToolVersion   string            `json:"tool_version"`
 	OS            string            `json:"os"`
 	ObservedAt    string            `json:"observed_at"`
+	ObservationID string            `json:"observation_id"`
+	DockerContext string            `json:"docker_context,omitempty"`
 	Request       inspectRequest    `json:"request"`
 	Endpoints     []inspectEndpoint `json:"endpoints"`
 	Warnings      []string          `json:"warnings"`
@@ -150,6 +158,7 @@ type inspectDoc struct {
 type inspectRequest struct {
 	Protocol string `json:"protocol"`
 	Scope    string `json:"scope"`
+	Mode     string `json:"mode"`
 	Ports    []int  `json:"ports"`
 	All      bool   `json:"all"`
 }
@@ -162,6 +171,8 @@ type inspectEndpoint struct {
 	Unattributed bool               `json:"unattributed"`
 	Owners       []inspectOwner     `json:"owners"`
 	Containers   []inspectContainer `json:"containers"`
+	// ProviderErrors are the observation failures that bear on this endpoint.
+	ProviderErrors []providerError `json:"provider_errors"`
 }
 
 type inspectOwner struct {
@@ -176,8 +187,12 @@ type inspectContainer struct {
 	Name        string `json:"name"`
 }
 
-func (a *app) runInspect(ctx context.Context, args []string, protocolFlag string) (int, error) {
+func (a *app) runInspect(ctx context.Context, args []string, protocolFlag, modeFlag string) (int, error) {
 	protocol, perr := parseProtocol(protocolFlag)
+	if perr != nil {
+		return exitUsage, perr
+	}
+	mode, perr := parseModeFlag(modeFlag)
 	if perr != nil {
 		return exitUsage, perr
 	}
@@ -198,11 +213,13 @@ func (a *app) runInspect(ctx context.Context, args []string, protocolFlag string
 	eps := snap.endpoints(ports)
 	doc := inspectDoc{
 		SchemaVersion: planSchemaVersion, Kind: inspectKind, ToolVersion: version(), OS: sys.GOOS(),
-		ObservedAt: formatTime(sys.Now()),
-		Request:    inspectRequest{Protocol: protocol, Scope: scopeFor(protocol), Ports: append([]int{}, ports...), All: ports == nil},
-		Endpoints:  []inspectEndpoint{},
-		Warnings:   append([]string{}, snap.warnings...),
+		ObservedAt:    formatTime(sys.Now()),
+		DockerContext: snap.dockerContext,
+		Request:       inspectRequest{Protocol: protocol, Scope: scopeFor(protocol), Mode: mode, Ports: append([]int{}, ports...), All: ports == nil},
+		Endpoints:     []inspectEndpoint{},
+		Warnings:      append([]string{}, snap.warnings...),
 	}
+	doc.ObservationID = observationID(doc.Request, eps, snap.dockerContext)
 	code := exitOK
 	if snap.providerFailed() {
 		code = exitFailed
@@ -213,7 +230,7 @@ func (a *app) runInspect(ctx context.Context, args []string, protocolFlag string
 	for _, e := range eps {
 		ie := inspectEndpoint{
 			Protocol: e.Protocol, Port: e.Port, Visibility: e.Visibility, Occupied: e.Occupied, Unattributed: e.Unattributed,
-			Owners: []inspectOwner{}, Containers: []inspectContainer{},
+			Owners: []inspectOwner{}, Containers: []inspectContainer{}, ProviderErrors: append([]providerError{}, e.ProviderErrors...),
 		}
 		for _, o := range e.Owners {
 			ie.Owners = append(ie.Owners, inspectOwner{PID: o.PID, Name: o.Name, StartTime: o.StartTime, IdentityStrength: o.Strength})
@@ -244,7 +261,7 @@ func (a *app) renderInspect(doc inspectDoc) {
 	if !doc.Request.All {
 		scope = "ports " + joinInts(doc.Request.Ports)
 	}
-	fmt.Fprintf(w, "[%s] %s %s on %s: %s\n", infoMark(), doc.Request.Protocol, doc.Request.Scope, doc.OS, scope)
+	fmt.Fprintf(w, "[%s] %s %s on %s: %s (mode %s, observation %s)\n", infoMark(), doc.Request.Protocol, doc.Request.Scope, doc.OS, scope, doc.Request.Mode, doc.ObservationID)
 	if len(doc.Endpoints) == 0 {
 		fmt.Fprintf(w, "No occupied endpoints were found.\n")
 	}
@@ -267,6 +284,9 @@ func (a *app) renderInspect(doc inspectDoc) {
 		if e.Unattributed {
 			fmt.Fprintf(w, "  an occupying socket has no attributable owner (try sudo / Administrator)\n")
 		}
+		for _, pe := range e.ProviderErrors {
+			fmt.Fprintf(w, "  provider error: %s\n", providerErrorLine(pe))
+		}
 	}
 	fmt.Fprintf(w, "Result: %s\n", doc.ExitClass)
 }
@@ -279,6 +299,11 @@ func (a *app) runPlan(ctx context.Context, args []string, opts planOptions, outp
 		return exitUsage, perr
 	}
 	opts.Protocol = protocol
+	mode, perr := parseModeFlag(opts.Mode)
+	if perr != nil {
+		return exitUsage, perr
+	}
+	opts.Mode = mode
 	if len(args) == 0 {
 		return exitUsage, usageErr("plan requires at least 1 port")
 	}
@@ -326,6 +351,7 @@ func (a *app) renderPlan(doc *planDoc, output string) {
 	fmt.Fprintf(w, "[%s] Plan %s\n", infoMark(), doc.PlanID)
 	fmt.Fprintf(w, "%s %s ports %s on %s; created %s, expires %s\n",
 		doc.Request.Protocol, doc.Request.Scope, joinInts(doc.Request.Ports), doc.OS, doc.CreatedAt, doc.ExpiresAt)
+	fmt.Fprintf(w, "Mode: %s  Observation: %s\n", doc.Request.Mode, doc.ObservationID)
 	fmt.Fprintf(w, "Resources (%d):\n", len(doc.Resources))
 	for _, r := range doc.Resources {
 		fmt.Fprintf(w, "  %s\n", resourceLine(r))
@@ -341,6 +367,15 @@ func (a *app) renderPlan(doc *planDoc, output string) {
 			state = "occupied"
 		}
 		fmt.Fprintf(w, "  %s %d: %s, visibility %s, resources [%s]\n", e.Protocol, e.Port, state, e.Visibility, strings.Join(e.Resources, " "))
+	}
+	var perrs []string
+	for _, e := range doc.Endpoints {
+		for _, pe := range e.ProviderErrors {
+			perrs = append(perrs, fmt.Sprintf("  %s %d: %s", e.Protocol, e.Port, providerErrorLine(pe)))
+		}
+	}
+	if len(perrs) > 0 {
+		fmt.Fprintf(w, "Provider errors (%d):\n%s\n", len(perrs), strings.Join(perrs, "\n"))
 	}
 	fmt.Fprintf(w, "Nothing was changed (actions_executed: %d). Result: %s\n", doc.ActionsExecuted, doc.ExitClass)
 	if output != "" {
@@ -446,6 +481,15 @@ func (a *app) printApply(res *applyDoc) {
 			}
 		}
 		fmt.Fprintln(w, line)
+	}
+	var perrs []string
+	for _, e := range res.Endpoints {
+		for _, pe := range e.ProviderErrors {
+			perrs = append(perrs, fmt.Sprintf("  %s %d: %s", e.Protocol, e.Port, providerErrorLine(pe)))
+		}
+	}
+	if len(perrs) > 0 {
+		fmt.Fprintf(w, "Provider errors (%d):\n%s\n", len(perrs), strings.Join(perrs, "\n"))
 	}
 	fmt.Fprintf(w, "Actions executed: %d. Result: %s\n", res.ActionsExecuted, res.ExitClass)
 }

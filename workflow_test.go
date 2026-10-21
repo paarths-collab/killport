@@ -861,7 +861,7 @@ func TestPlanIDAndNoPII(t *testing.T) {
 	}
 	var raw2 map[string]any
 	decodeDoc(t, out, &raw2)
-	want := []string{"schema_version", "kind", "plan_id", "tool_version", "os", "created_at", "expires_at", "request", "endpoints", "resources", "refused", "actions_executed", "exit_class"}
+	want := []string{"schema_version", "kind", "plan_id", "tool_version", "os", "created_at", "expires_at", "observation_id", "request", "endpoints", "resources", "refused", "actions_executed", "exit_class"}
 	var got []string
 	for k := range raw2 {
 		got = append(got, k)

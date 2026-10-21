@@ -34,10 +34,15 @@ const (
 
 // applyDoc is the apply result document.
 type applyDoc struct {
-	SchemaVersion   int             `json:"schema_version"`
-	Kind            string          `json:"kind"`
-	PlanID          string          `json:"plan_id"`
-	AppliedAt       string          `json:"applied_at"`
+	SchemaVersion int    `json:"schema_version"`
+	Kind          string `json:"kind"`
+	PlanID        string `json:"plan_id"`
+	AppliedAt     string `json:"applied_at"`
+	// ObservationID identifies the outcome observation (see observationID);
+	// DockerContext is the DOCKER_CONTEXT it ran under. Both are absent when
+	// nothing was observed (an expired plan).
+	ObservationID   string          `json:"observation_id,omitempty"`
+	DockerContext   string          `json:"docker_context,omitempty"`
 	ActionsExecuted int             `json:"actions_executed"`
 	Resources       []applyResource `json:"resources"`
 	Endpoints       []applyEndpoint `json:"endpoints"`
@@ -64,6 +69,8 @@ type applyEndpoint struct {
 	Status     string   `json:"status"`
 	Visibility string   `json:"visibility"`
 	Holders    []holder `json:"holders,omitempty"`
+	// ProviderErrors are the observation failures that bear on this endpoint.
+	ProviderErrors []providerError `json:"provider_errors"`
 }
 
 // holder is whatever occupies an endpoint after the action.
@@ -148,6 +155,8 @@ func applyPlan(ctx context.Context, sys system, doc *planDoc) (*applyDoc, int, [
 	out := &applyDoc{
 		SchemaVersion: planSchemaVersion, Kind: applyKind, PlanID: doc.PlanID, AppliedAt: formatTime(startedAt),
 		ActionsExecuted: executed, Resources: results, Endpoints: statuses,
+		DockerContext: final.dockerContext,
+		ObservationID: observationID(doc.Request, final.endpoints(doc.Request.Ports), final.dockerContext),
 	}
 	code := applyClass(out)
 	out.ExitClass = exitClassName(code)
@@ -346,7 +355,10 @@ func (ap *applier) classify(snap *snapshot) []applyEndpoint {
 		default:
 			status = epBlockedNewOwner
 		}
-		out = append(out, applyEndpoint{Protocol: e.Protocol, Port: port, Status: status, Visibility: e.Visibility, Holders: holders})
+		out = append(out, applyEndpoint{
+			Protocol: e.Protocol, Port: port, Status: status, Visibility: e.Visibility, Holders: holders,
+			ProviderErrors: append([]providerError{}, e.ProviderErrors...),
+		})
 	}
 	return out
 }
