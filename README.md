@@ -197,7 +197,7 @@ A single object on stdout, with the exit code from [Exit codes](#exit-codes):
 {"error": "requires at least 1 port (or use --check to inspect)", "code": "usage"}
 ```
 
-`code` is one of `usage` (exit 2), `missing_dependency` (exit 1) or `enumeration_failed` (exit 1). The workflow subcommands also return `write_failed` (exit 1) and add an `exit_class` field.
+`code` is one of `usage` (exit 2), `missing_dependency` (exit 1) or `enumeration_failed` (exit 1). The workflow subcommands also return `write_failed` (exit 1) and add an `exit_class` field. An unexpected internal failure (a recovered panic) is reported as one such document with `code` `internal`, `exit_class` `failed` and exit 1, never as a stack trace.
 
 ## 🚦 Exit codes
 
@@ -232,7 +232,7 @@ The classic `killport <ports>` command is unchanged and remains the default. Not
 
 - `--protocol tcp` (default) matches LISTEN sockets by local port. `--protocol udp` matches bound sockets by local port. Apply takes the protocol from the plan, so it has no `--protocol`, `--mode`, `--force`, `--ttl` or `--grace` flags.
 - `--mode auto` (default) considers containers and native processes. `native` plans only native processes, and `container` plans only containers.
-- `plan` with `-o` writes the file even when the exit class is not `ok`. With `--json` it also prints the plan to stdout.
+- `plan` with `-o` writes the file (mode 0600) even when the exit class is not `ok`; an existing regular file is replaced, but a symbolic link is refused. With `--json` it also prints the plan to stdout.
 - The root-level `-d/--dry-run` flag belongs to the classic command. For the workflow, `plan` is the preview.
 
 ```sh
@@ -343,7 +343,7 @@ Drift example, verbatim from `docs/evidence/apply-drift.json`. The plan was made
 |---|---|
 | `visibility` | `complete_for_requested_scope`, `permission_limited`, `none_visible`, `provider_unavailable` |
 | Resource `result` | `not_attempted`, `identity_changed`, `signal_sent`, `stopped`, `permission_denied`, `timeout_unknown`, `failed` |
-| Endpoint `status` | `free`, `blocked_by_original` (the planned owner still holds the port), `blocked_by_new_owner` (someone else holds it), `not_verifiable` |
+| Endpoint `status` | `free`, `blocked_by_original` (the planned owner still holds the port), `blocked_by_new_owner` (someone else holds it), `blocked_by_refused_owner` (the occupant is one the plan itself refused), `not_verifiable` |
 | `identity_strength` | `pidfd`, `handle`, `start_time` (the value `none` is never written into a plan) |
 | `action` / `signal` | `signal` with `SIGTERM`, `SIGKILL` or `terminate` (Windows); `docker_stop` |
 | `provider` | `native`, `docker` |
@@ -360,10 +360,10 @@ The workflow uses exit codes 0 to 4. The classic command uses only 0 to 2.
 | Code | Class | What produces it |
 |---|---|---|
 | `0` | `ok` | Plan or inspect: no refusals, complete visibility, and every occupied endpoint has a resource. Apply: no failed or uncertain resource, and every endpoint is `free` with complete visibility. |
-| `1` | `failed` | Plan: any refusal (for example a hidden or denied owner, Docker infrastructure without a container, a protected PID, or a short container ID), or an occupied endpoint with no resource. Inspect: an owner or Docker provider failed. Apply: a resource `failed` or `permission_denied`, or an endpoint `blocked_by_original` after acting (there is no SIGKILL escalation). Also missing tools and a plan file that cannot be written. |
+| `1` | `failed` | Plan: any refusal (for example a hidden or denied owner, Docker infrastructure without a container, a protected PID, or a short container ID), or an occupied endpoint with no resource. Inspect: an owner or Docker provider failed. Apply: a resource `failed` or `permission_denied`, or an endpoint `blocked_by_original` or `blocked_by_refused_owner` after acting (there is no SIGKILL escalation; a fresh plan would refuse that occupant again). Also missing tools and a plan file that cannot be written. |
 | `2` | `usage` | Invalid arguments or flag values, an unreadable, invalid or modified plan, a plan from another OS, or an unsupported schema version. Returned before anything is observed. |
 | `3` | `needs_fresh_plan` | Apply: the plan has expired (checked before observing), a resource's identity changed (`identity_changed`), or an endpoint is `blocked_by_new_owner`. |
-| `4` | `uncertain` | Inspect or plan: a `permission_limited` or `none_visible` endpoint, or inspect with no ports while the socket table cannot be read. Apply: a `timeout_unknown` resource, a `not_verifiable` endpoint, or any endpoint whose visibility is not complete. |
+| `4` | `uncertain` | Inspect or plan: a `permission_limited` or `none_visible` endpoint, or inspect with no ports while the socket table cannot be read. Apply: a `timeout_unknown` resource, a `not_verifiable` endpoint, any endpoint whose visibility is not complete, or an apply that was interrupted (see Limits). |
 
 When several conditions apply, the worst class wins, in this order: `failed` (1), then `uncertain` (4), then `needs_fresh_plan` (3), then `ok` (0). Usage (2) is returned before anything is observed, so it never competes with the others.
 
@@ -373,11 +373,11 @@ Two details differ by command. In plan and inspect, `provider_unavailable` gives
 
 Apply signals a process only if the PID still belongs to the process that was planned. How strongly that is enforced depends on the OS:
 
-- **Linux**: identity is the PID plus the start time in `/proc/<pid>/stat` (field 22). When `pidfd_open` works (kernel 5.3 or later, and not blocked by the sandbox), the start-time check and the signal both go through the pidfd, so there is no race (`identity_strength: pidfd`). Otherwise the check is made and then the signal is sent, leaving a small race (`start_time`).
+- **Linux**: identity is the PID plus the start time in `/proc/<pid>/stat` (field 22). When `pidfd_open` works (kernel 5.3 or later, and not blocked by the sandbox), the start-time check and the signal both go through the pidfd, so there is no race (`identity_strength: pidfd`). Otherwise (or when `pidfd_send_signal` is unavailable or filtered) the check is made and then the signal is sent, leaving a small race (`start_time`).
 - **macOS**: identity is the kernel process start time (`sec.usec`). The check is made and then the signal is sent, leaving a small race (`start_time`).
 - **Windows**: identity is the process creation time, read from an open process handle. The check and `TerminateProcess` both use that handle (`handle`). Windows always terminates the process; `--force` does not change this, and the plan records `terminate`.
 - A process whose identity cannot be read is refused. It is never signalled by PID alone.
-- Always refused: PID 0 or unknown, PID 1 and below, killport itself, and Windows PID 4 (System). A container is bound to its full 64-hex ID. A container listed with a short ID is refused.
+- Always refused: PID 0 or unknown, PID 1 and below, PIDs above 2147483647, killport itself, and Windows PID 4 (System). A container is bound to its full 64-hex ID. A container listed with a short ID is refused.
 
 ### Limits
 
@@ -387,7 +387,8 @@ Apply signals a process only if the PID still belongs to the process that was pl
 - `--force` plans SIGKILL on Linux and macOS. On Windows the process is always terminated.
 - The plan is a checksum, not a signature (see above).
 - The Linux evidence run was done as root in a container. Owners that are invisible to a non-root user are therefore not exercised by that run.
-- A plan expires after `--ttl` (default 5 minutes). Apply then exits 3 without observing or acting.
+- A plan expires after `--ttl` (default 5 minutes). Apply then exits 3 without observing or acting. A plan whose `expires_at` lies more than 24 hours after `created_at` is rejected as invalid.
+- Apply stops after the grace period plus 90 seconds per wave of 4 resources (at most 10 minutes), or on SIGINT or SIGTERM. It then starts no further action, observes the outcome once, and prints the partial results with `error` set and exit class `uncertain` (4).
 
 ### Verified evidence
 
