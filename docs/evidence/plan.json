@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "kind": "killport.plan",
+  "plan_id": "sha256:a11c0b13098d02546523458067bdbd4c749834a2b0116f2c2f20620ef72e0b87",
+  "tool_version": "dev",
+  "os": "linux",
+  "created_at": "2026-10-21T14:00:38Z",
+  "expires_at": "2026-10-21T14:05:38Z",
+  "request": {
+    "protocol": "tcp",
+    "scope": "listener",
+    "ports": [
+      3000,
+      3001
+    ],
+    "force": false,
+    "grace_seconds": 10
+  },
+  "endpoints": [
+    {
+      "protocol": "tcp",
+      "port": 3000,
+      "visibility": "complete_for_requested_scope",
+      "occupied": true,
+      "resources": [
+        "proc:362:2164526"
+      ],
+      "refused": []
+    },
+    {
+      "protocol": "tcp",
+      "port": 3001,
+      "visibility": "complete_for_requested_scope",
+      "occupied": true,
+      "resources": [
+        "proc:363:2164526"
+      ],
+      "refused": []
+    }
+  ],
+  "resources": [
+    {
+      "resource_id": "proc:362:2164526",
+      "provider": "native",
+      "pid": 362,
+      "name": "python3",
+      "start_time": "2164526",
+      "identity_strength": "pidfd",
+      "ports": [
+        3000
+      ],
+      "action": "signal",
+      "signal": "SIGTERM"
+    },
+    {
+      "resource_id": "proc:363:2164526",
+      "provider": "native",
+      "pid": 363,
+      "name": "python3",
+      "start_time": "2164526",
+      "identity_strength": "pidfd",
+      "ports": [
+        3001
+      ],
+      "action": "signal",
+      "signal": "SIGTERM"
+    }
+  ],
+  "refused": [],
+  "actions_executed": 0,
+  "exit_class": "ok"
+}

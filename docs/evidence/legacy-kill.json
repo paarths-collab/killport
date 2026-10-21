@@ -1,0 +1,12 @@
+[
+  {
+    "port": "3002",
+    "process_name": "python3",
+    "pid": "496",
+    "killed": true,
+    "is_docker": false,
+    "status": "killed",
+    "action": "kill_process",
+    "dry_run": false
+  }
+]
