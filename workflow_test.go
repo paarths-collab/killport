@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -926,50 +927,281 @@ func TestApplyTamperedPlanIsUsageError(t *testing.T) {
 	}
 }
 
-// forgePlan builds a self-consistent plan (valid plan_id) with a mutation, to
-// show that validation rejects dangerous content even when the checksum fits.
+// clonePlan deep-copies a plan through JSON, so a forged case never shares a
+// backing array (resources, ports, endpoint references) with the base plan or
+// with another case.
+func clonePlan(t *testing.T, base planDoc) planDoc {
+	t.Helper()
+	data, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d planDoc
+	if err := json.Unmarshal(data, &d); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// forgePlan builds a self-consistent plan (valid plan_id) from a deep copy of
+// base with a mutation, to show that validation rejects dangerous content even
+// when the checksum fits.
 func forgePlan(t *testing.T, base planDoc, mutate func(*planDoc)) string {
 	t.Helper()
-	mutate(&base)
-	base.PlanID = computePlanID(base)
-	data, err := json.Marshal(base)
+	d := clonePlan(t, base)
+	mutate(&d)
+	d.PlanID = computePlanID(d)
+	data, err := json.Marshal(d)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(data)
 }
 
-func TestApplyRejectsForgedDangerousPlans(t *testing.T) {
-	w := newWfWorld("linux", true)
-	w.listen("tcp", 3000, 100, "node")
-	w.publish()
-	_, base := planFile(t, w.f, w.f, "3000")
-	cases := map[string]func(*planDoc){
-		"pid 1": func(d *planDoc) {
-			d.Resources[0].PID = 1
-			d.Resources[0].ResourceID = procResourceID(1, d.Resources[0].StartTime)
-		},
-		"no start time":        func(d *planDoc) { d.Resources[0].StartTime = ""; d.Resources[0].ResourceID = "proc:100:" },
-		"port outside request": func(d *planDoc) { d.Resources[0].Ports = []int{4000} },
-		"option injection": func(d *planDoc) {
-			d.Resources = append(d.Resources, planResource{ResourceID: "container:--all", Provider: "docker", ContainerID: "--all", Name: "x", Ports: []int{3000}, Action: "docker_stop"})
-		},
-		"bad signal":    func(d *planDoc) { d.Resources[0].Signal = "SIGHUP" },
-		"unknown prov":  func(d *planDoc) { d.Resources[0].Provider = "systemd" },
-		"bad protocol":  func(d *planDoc) { d.Request.Protocol = "sctp" },
-		"huge grace":    func(d *planDoc) { d.Request.GraceSeconds = 999999 },
-		"wrong version": func(d *planDoc) { d.SchemaVersion = 2 },
-		"wrong kind":    func(d *planDoc) { d.Kind = "killport.apply_result" },
+// resIdx returns the index of the first resource of the given provider.
+func resIdx(d *planDoc, provider string) int {
+	for i, r := range d.Resources {
+		if r.Provider == provider {
+			return i
+		}
 	}
-	for name, mutate := range cases {
-		t.Run(name, func(t *testing.T) {
-			code, out, _ := wfRun(t, w.f, w.f, forgePlan(t, base, mutate), "apply", "--json", "-")
+	panic("no " + provider + " resource in the base plan")
+}
+
+// retarget replaces resource i and rewrites every endpoint reference to it, so
+// the forged plan stays consistent and is rejected for the intended reason
+// only.
+func retarget(d *planDoc, i int, r planResource) {
+	old := d.Resources[i].ResourceID
+	d.Resources[i] = r
+	for e := range d.Endpoints {
+		for j, id := range d.Endpoints[e].Resources {
+			if id == old {
+				d.Endpoints[e].Resources[j] = r.ResourceID
+			}
+		}
+	}
+}
+
+// forgedProc / forgedContainer are valid resources to be spoiled by one field.
+func forgedProc(edit func(*planResource)) func(*planDoc) {
+	return func(d *planDoc) {
+		i := resIdx(d, providerNative)
+		r := d.Resources[i]
+		r.Ports = append([]int(nil), r.Ports...)
+		edit(&r)
+		retarget(d, i, r)
+	}
+}
+
+func forgedContainer(edit func(*planResource)) func(*planDoc) {
+	return func(d *planDoc) {
+		i := resIdx(d, providerDocker)
+		r := d.Resources[i]
+		r.Ports = append([]int(nil), r.Ports...)
+		edit(&r)
+		retarget(d, i, r)
+	}
+}
+
+// decodeAndValidate is the pure part of apply's plan intake.
+func decodeAndValidate(data string) error {
+	doc, err := decodePlan([]byte(data))
+	if err != nil {
+		return err
+	}
+	return validatePlan(doc)
+}
+
+func TestApplyRejectsForgedDangerousPlans(t *testing.T) {
+	// One valid base plan per OS: a native process on 3000 and (linux) a
+	// container on 3001. Every case below is a deep copy of it with ONE
+	// spoiled field, re-checksummed, and must be rejected for that reason.
+	lin := newWfWorld("linux", true)
+	lin.listen("tcp", 3000, 100, "node")
+	lin.container(hex64(0xd0c), "web", 0, 3001)
+	lin.publish()
+	_, linBase := planFile(t, lin.f, lin.f, "3000", "3001")
+	if len(linBase.Resources) != 2 || len(linBase.Endpoints) != 2 {
+		t.Fatalf("base plan = %+v", linBase)
+	}
+	win := newWfWorld("windows", false)
+	win.listen("tcp", 3000, 1234, "node.exe")
+	win.publish()
+	_, winBase := planFile(t, win.f, win.f, "3000")
+
+	noop := func(*planDoc) {}
+	t.Run("controls: the unspoiled plans pass the whole intake", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			base   planDoc
+			mutate func(*planDoc)
+		}{
+			"linux":                             {linBase, noop},
+			"windows":                           {winBase, noop},
+			"pid 4 is an ordinary pid on linux": {linBase, forgedProc(func(r *planResource) { r.PID = 4; r.ResourceID = procResourceID(4, r.StartTime) })},
+			"pid 2 is accepted (no rule)":       {linBase, forgedProc(func(r *planResource) { r.PID = 2; r.ResourceID = procResourceID(2, r.StartTime) })},
+		} {
+			if err := decodeAndValidate(forgePlan(t, tc.base, tc.mutate)); err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+		}
+		// And the harness itself must not have disturbed the base.
+		if err := decodeAndValidate(forgePlan(t, linBase, noop)); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	badID := func(id string) func(*planDoc) {
+		return forgedContainer(func(r *planResource) { r.ContainerID = id; r.ResourceID = containerResourceID(id) })
+	}
+	badPID := func(pid int) func(*planDoc) {
+		return forgedProc(func(r *planResource) { r.PID = pid; r.ResourceID = procResourceID(pid, r.StartTime) })
+	}
+	type forged struct {
+		name   string
+		base   *planDoc
+		mutate func(*planDoc)
+		want   string // substring of the rejection
+	}
+	lb, wb := &linBase, &winBase
+	cases := []forged{
+		// protected and out-of-range PIDs
+		{"pid 1", lb, badPID(1), "targets protected PID 1"},
+		{"pid 0", lb, badPID(0), "targets protected PID 0"},
+		{"negative pid", lb, badPID(-5), "targets protected PID -5"},
+		{"windows system pid 4", wb, forgedProc(func(r *planResource) { r.PID = 4; r.ResourceID = procResourceID(4, r.StartTime) }), "Windows System process"},
+		{"pid beyond 32 bits aliasing pid 4", wb, badPID(1<<32 + 4), "out of range"},
+		{"pid just beyond int32", lb, badPID(math.MaxInt32 + 1), "out of range"},
+		// duplicates
+		{"duplicate resources", lb, func(d *planDoc) { d.Resources = append(d.Resources, d.Resources[resIdx(d, providerNative)]) }, "duplicate resource"},
+		{"duplicate container", lb, func(d *planDoc) { d.Resources = append(d.Resources, d.Resources[resIdx(d, providerDocker)]) }, "duplicate resource"},
+		// container ids: option injection and malformed ids
+		{"container id -t", lb, badID("-t"), "invalid container id"},
+		{"container id --all", lb, badID("--all"), "invalid container id"},
+		{"container id --signal=KILL", lb, badID("--signal=KILL"), "invalid container id"},
+		{"container id 63 hex", lb, badID(strings.Repeat("a", 63)), "invalid container id"},
+		{"container id 65 hex", lb, badID(strings.Repeat("a", 65)), "invalid container id"},
+		{"container id uppercase", lb, badID(strings.Repeat("A", 64)), "invalid container id"},
+		{"container id non-hex", lb, badID(strings.Repeat("g", 64)), "invalid container id"},
+		{"container id empty", lb, badID(""), "invalid container id"},
+		// ports
+		{"port outside request", lb, forgedProc(func(r *planResource) { r.Ports = []int{4000} }), "which was not requested"},
+		{"container port outside request", lb, forgedContainer(func(r *planResource) { r.Ports = []int{3000, 4000} }), "which was not requested"},
+		{"resource without ports", lb, forgedProc(func(r *planResource) { r.Ports = []int{} }), "has no ports"},
+		{"request ports unsorted", lb, func(d *planDoc) { d.Request.Ports = []int{3001, 3000} }, "unique, ascending"},
+		{"request port zero", lb, func(d *planDoc) { d.Request.Ports = []int{0, 3000, 3001} }, "unique, ascending"},
+		{"request port too large", lb, func(d *planDoc) { d.Request.Ports = append(d.Request.Ports, 70000) }, "unique, ascending"},
+		{"request without ports", lb, func(d *planDoc) { d.Request.Ports = []int{} }, "no ports"},
+		// signals
+		{"signal SIGHUP", lb, forgedProc(func(r *planResource) { r.Signal = "SIGHUP" }), `has signal "SIGHUP", expected "SIGTERM"`},
+		{"signal empty", lb, forgedProc(func(r *planResource) { r.Signal = "" }), `has signal "", expected "SIGTERM"`},
+		{"signal lowercase", lb, forgedProc(func(r *planResource) { r.Signal = "sigterm" }), `has signal "sigterm"`},
+		{"terminate on linux", lb, forgedProc(func(r *planResource) { r.Signal = sigTerminate }), `has signal "terminate", expected "SIGTERM"`},
+		{"SIGKILL without force", lb, forgedProc(func(r *planResource) { r.Signal = sigKill }), `has signal "SIGKILL", expected "SIGTERM"`},
+		{"SIGTERM although force", lb, func(d *planDoc) { d.Request.Force = true }, `has signal "SIGTERM", expected "SIGKILL"`},
+		{"SIGTERM on windows", wb, forgedProc(func(r *planResource) { r.Signal = sigTerm }), `has signal "SIGTERM", expected "terminate"`},
+		// action / provider mismatches
+		{"native resource with docker_stop", lb, forgedProc(func(r *planResource) { r.Action = actionDockerStop }), `unsupported action "docker_stop"`},
+		{"native resource with empty action", lb, forgedProc(func(r *planResource) { r.Action = "" }), "unsupported action"},
+		{"container with signal action", lb, forgedContainer(func(r *planResource) { r.Action = actionSignal }), `unsupported action "signal"`},
+		{"container with pid set", lb, forgedContainer(func(r *planResource) { r.PID = 100 }), "inconsistent with its container id"},
+		{"container with start time", lb, forgedContainer(func(r *planResource) { r.StartTime = "1" }), "inconsistent with its container id"},
+		{"native resource with container id", lb, forgedProc(func(r *planResource) { r.ContainerID = hex64(1) }), "inconsistent with its pid/start_time"},
+		{"native provider on a container resource", lb, forgedContainer(func(r *planResource) { r.Provider = providerNative }), "protected PID 0"},
+		{"docker provider on a native resource", lb, forgedProc(func(r *planResource) { r.Provider = providerDocker }), "invalid container id"},
+		{"unknown provider", lb, forgedProc(func(r *planResource) { r.Provider = "systemd" }), `unknown provider "systemd"`},
+		{"resource id mismatch", lb, forgedProc(func(r *planResource) { r.ResourceID = "proc:101:" + r.StartTime }), "inconsistent with its pid/start_time"},
+		{"no start time", lb, forgedProc(func(r *planResource) { r.StartTime = ""; r.ResourceID = procResourceID(r.PID, "") }), "has no process identity"},
+		{"no identity strength", lb, forgedProc(func(r *planResource) { r.IdentityStrength = "" }), "has no process identity"},
+		{"identity strength none", lb, forgedProc(func(r *planResource) { r.IdentityStrength = strengthNone }), "has no process identity"},
+		{"container grace out of range", lb, forgedContainer(func(r *planResource) { r.GraceSeconds = 999999 }), "out-of-range grace"},
+		{"container negative grace", lb, forgedContainer(func(r *planResource) { r.GraceSeconds = -1 }), "out-of-range grace"},
+		// mode
+		{"native resource in a container-mode plan", lb, func(d *planDoc) { d.Request.Mode = modeContainer }, "plan's mode is \"container\""},
+		{"container in a native-mode plan", lb, func(d *planDoc) { d.Request.Mode = modeNative }, "plan's mode is \"native\""},
+		{"unknown mode", lb, func(d *planDoc) { d.Request.Mode = "everything" }, "unsupported mode"},
+		// request and document
+		{"bad protocol", lb, func(d *planDoc) { d.Request.Protocol = "sctp" }, "unsupported protocol"},
+		{"scope mismatch", lb, func(d *planDoc) { d.Request.Scope = scopeUDP }, "does not match protocol"},
+		{"huge grace", lb, func(d *planDoc) { d.Request.GraceSeconds = 999999 }, "grace_seconds 999999 is out of range"},
+		{"wrong version", lb, func(d *planDoc) { d.SchemaVersion = 2 }, "unsupported schema_version"},
+		{"wrong kind", lb, func(d *planDoc) { d.Kind = "killport.apply_result" }, `kind is "killport.apply_result"`},
+		{"endpoint references unknown resource", lb, func(d *planDoc) { d.Endpoints[0].Resources = append(d.Endpoints[0].Resources, "proc:999:1") }, "references unknown resource"},
+		{"endpoint for an unrequested port", lb, func(d *planDoc) { d.Endpoints[0].Port = 4000 }, "was not requested"},
+		// time window (review m3)
+		{"expiry far in the future", lb, func(d *planDoc) { d.ExpiresAt = "2099-01-01T00:00:00Z" }, "expires_at must not"},
+		{"expiry just over 24h", lb, func(d *planDoc) { d.ExpiresAt = "2026-10-22T12:00:01Z" }, "expires_at must not"},
+		{"expiry before creation", lb, func(d *planDoc) { d.ExpiresAt = "2026-10-21T11:59:59Z" }, "expires_at must not"},
+		{"created_at unparseable", lb, func(d *planDoc) { d.CreatedAt = "yesterday" }, "created_at is not an RFC 3339 time"},
+		{"expires_at unparseable", lb, func(d *planDoc) { d.ExpiresAt = "" }, "expires_at is not an RFC 3339 time"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := lin
+			if c.base == wb {
+				w = win
+			}
+			data := forgePlan(t, *c.base, c.mutate)
+			// 1. the intake rejects it, for the intended reason
+			err := decodeAndValidate(data)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("intake error = %v, want it to contain %q", err, c.want)
+			}
+			// 2. and the command exits 2 with that reason and touches nothing
+			code, out, _ := wfRun(t, w.f, w.f, data, "apply", "--json", "-")
 			m := decodeErr(t, out)
-			if code != 2 || m["code"] != "usage" || !strings.Contains(m["error"], "invalid plan") {
+			if code != 2 || m["code"] != "usage" || m["exit_class"] != "usage" || !strings.Contains(m["error"], "invalid plan") || !strings.Contains(m["error"], c.want) {
 				t.Fatalf("code=%d out=%s", code, out)
 			}
 			assertNoMutation(t, w.f)
 		})
+	}
+}
+
+// The plan's own PID is deliberately NOT a validation error: it is a
+// per-resource failure at apply time ("refusing to signal killport itself"),
+// so the rest of the plan still runs. A forged plan naming killport must never
+// get a signal delivered to it.
+func TestApplyRefusesToSignalItselfEvenInForgedPlan(t *testing.T) {
+	w := newWfWorld("linux", false)
+	w.listen("tcp", 3000, 100, "node").listen("tcp", 3001, fakeOwnPID, "killport")
+	w.publish()
+	_, base := planFile(t, w.f, w.f, "3000", "3001")
+	if len(base.Resources) != 1 || len(base.Refused) != 1 {
+		t.Fatalf("the plan itself already refuses killport: %+v", base)
+	}
+	data := forgePlan(t, base, func(d *planDoc) {
+		own := planResource{ResourceID: procResourceID(fakeOwnPID, wfStart(fakeOwnPID)), Provider: providerNative, PID: fakeOwnPID, Name: "killport",
+			StartTime: wfStart(fakeOwnPID), IdentityStrength: strengthStartTime, Ports: []int{3001}, Action: actionSignal, Signal: sigTerm}
+		d.Resources = append(d.Resources, own)
+		d.Refused = []planRefusal{}
+		for i := range d.Endpoints {
+			d.Endpoints[i].Refused = []planRefusal{}
+			if d.Endpoints[i].Port == 3001 {
+				d.Endpoints[i].Resources = append(d.Endpoints[i].Resources, own.ResourceID)
+			}
+		}
+	})
+	if err := decodeAndValidate(data); err != nil {
+		t.Fatalf("a plan naming the own PID is structurally valid: %v", err)
+	}
+	w.f.onSignal = func(f *fakeSystem, s fakeSignal) { w.removePID(s.PID); w.publish() }
+	code, out, _ := wfRun(t, w.f, w.f, data, "apply", "--json", "-")
+	ad := decodeApplyDoc(t, out)
+	own := resultOf(ad, procResourceID(fakeOwnPID, wfStart(fakeOwnPID)))
+	if own.Result != resFailed || !strings.Contains(own.Error, "refusing to signal killport itself") {
+		t.Errorf("own resource = %+v", own)
+	}
+	for _, s := range w.f.signals {
+		if s.PID == fakeOwnPID {
+			t.Fatalf("killport signalled itself: %+v", w.f.signals)
+		}
+	}
+	if resultOf(ad, procResourceID(100, wfStart(100))).Result != resSignalSent {
+		t.Errorf("the legitimate resource should still run: %+v", ad.Resources)
+	}
+	if code != 1 || ad.ActionsExecuted != 1 {
+		t.Errorf("code=%d executed=%d", code, ad.ActionsExecuted)
 	}
 }
 

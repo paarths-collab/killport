@@ -78,38 +78,66 @@ func mapSignalErr(pid int, err error) error {
 	return fmt.Errorf("signalling PID %d: %w", pid, err)
 }
 
-// platformSignalIfSame binds the signal to the process via a pidfd: the pidfd
-// is opened first, then the start time is re-read, so a PID that is reused
-// after the open can never receive the signal (the pidfd keeps pointing at the
-// original process). Without pidfd support it falls back to compare + kill.
-func platformSignalIfSame(pid int, startTime string, force bool) error {
-	if err := validSignalPID(pid); err != nil {
-		return err
-	}
-	sig := unixSignal(force)
-	fd, err := unix.PidfdOpen(pid, 0)
-	if err != nil {
-		if errors.Is(err, unix.ESRCH) {
-			return errProcessNotFound
-		}
-		// ENOSYS (old kernel) or blocked by a sandbox: weaker but still
-		// identity-checked path.
-		cur, serr := linuxStartTime(pid)
-		if serr != nil {
-			return serr
-		}
-		if cur != startTime {
-			return errIdentityChanged
-		}
-		return mapSignalErr(pid, unix.Kill(pid, sig))
-	}
-	defer unix.Close(fd)
-	cur, err := linuxStartTime(pid)
+// The pidfd and kill syscalls and the start-time read are variables so tests
+// can simulate a kernel or sandbox without pidfd, a pidfd_send_signal blocked
+// by seccomp, and a PID that is reused in between.
+var (
+	pidfdOpen       = func(pid int) (int, error) { return unix.PidfdOpen(pid, 0) }
+	pidfdSendSignal = func(fd int, sig unix.Signal) error { return unix.PidfdSendSignal(fd, sig, nil, 0) }
+	pidfdClose      = unix.Close
+	killPID         = func(pid int, sig unix.Signal) error { return unix.Kill(pid, sig) }
+	procStartTime   = linuxStartTime
+)
+
+// compareThenKill is the weaker identity-checked path: re-read the start
+// time, compare it with the planned one, and only then kill(2). A tiny race
+// between the compare and the kill remains; the compare itself is never
+// skipped.
+func compareThenKill(pid int, startTime string, sig unix.Signal) error {
+	cur, err := procStartTime(pid)
 	if err != nil {
 		return err
 	}
 	if cur != startTime {
 		return errIdentityChanged
 	}
-	return mapSignalErr(pid, unix.PidfdSendSignal(fd, sig, nil, 0))
+	return mapSignalErr(pid, killPID(pid, sig))
+}
+
+// platformSignalIfSame binds the signal to the process via a pidfd: the pidfd
+// is opened first, then the start time is re-read, so a PID that is reused
+// after the open can never receive the signal (the pidfd keeps pointing at the
+// original process). Without pidfd support (pidfd_open or pidfd_send_signal
+// missing, ENOSYS, or blocked by a seccomp profile with EPERM) it falls back
+// to compare + kill, which checks the identity again.
+func platformSignalIfSame(pid int, startTime string, force bool) error {
+	if err := validSignalPID(pid); err != nil {
+		return err
+	}
+	sig := unixSignal(force)
+	fd, err := pidfdOpen(pid)
+	if err != nil {
+		if errors.Is(err, unix.ESRCH) {
+			return errProcessNotFound
+		}
+		// ENOSYS (old kernel) or blocked by a sandbox: weaker but still
+		// identity-checked path.
+		return compareThenKill(pid, startTime, sig)
+	}
+	defer pidfdClose(fd)
+	cur, err := procStartTime(pid)
+	if err != nil {
+		return err
+	}
+	if cur != startTime {
+		return errIdentityChanged
+	}
+	err = pidfdSendSignal(fd, sig)
+	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EPERM) {
+		// pidfd_send_signal itself is unavailable (ENOSYS) or filtered by a
+		// seccomp profile (EPERM). A genuine EPERM (not allowed to signal that
+		// process) is reproduced by kill(2) and reported as a permission error.
+		return compareThenKill(pid, startTime, sig)
+	}
+	return mapSignalErr(pid, err)
 }

@@ -56,12 +56,16 @@ type act struct {
 	err       error
 
 	// Native process identity captured at enumeration time (planKill).
-	// startTime is the opaque token from system.ProcessIdentity; it is empty
-	// when no identity is available, in which case the LEGACY command falls
-	// back to the unchecked Kill(pid). gone means the process had already
-	// exited when its identity was looked up.
-	startTime string
-	gone      bool
+	// startTime is the opaque token from system.ProcessIdentity. It is empty
+	// when the platform has no identity support at all (noIdentity), the only
+	// case in which the LEGACY command falls back to the unchecked Kill(pid).
+	// identErr is a failed lookup (permission, ...): nothing is signalled for
+	// it. gone means the process had already exited when its identity was
+	// looked up.
+	startTime  string
+	noIdentity bool
+	identErr   error
+	gone       bool
 }
 
 // ownerKey identifies one owner of one port: a native PID (cid empty) or a
@@ -187,7 +191,21 @@ func planKill(sys system, ports []int, lst listing, dk dockerState, dryRun bool)
 				a = &act{kind: actionKill, pid: l.PID, name: l.Process}
 				captureIdentity(sys, a)
 				procAct[l.PID] = a
-				acts = append(acts, a)
+				if a.identErr == nil {
+					acts = append(acts, a)
+				}
+			}
+			if a.identErr != nil {
+				// The identity lookup failed for a reason other than "no such
+				// process": signalling an unverified PID is exactly what the
+				// identity check exists to prevent.
+				r.Status = statusFailed
+				r.Error = fmt.Sprintf("cannot verify the identity of PID %d (%s), so nothing was signalled: %v", l.PID, orUnknown(l.Process), a.identErr)
+				if looksLikePermission(a.identErr) {
+					r.Error += " (try again with sudo / as Administrator)"
+				}
+				rows = append(rows, &killRow{KillResult: r, port: port, owner: owner, hasOwner: true})
+				continue
 			}
 			r.Status = statusPlanned
 			r.Action = actionKill
@@ -198,11 +216,12 @@ func planKill(sys system, ports []int, lst listing, dk dockerState, dryRun bool)
 }
 
 // captureIdentity records the process start time for a native action. The
-// lookup is read-only, so it is also done in dry-run mode. When the identity
-// is unavailable (strength "none" or a lookup error other than "not found")
-// the act keeps an empty startTime and the legacy command falls back to the
-// unchecked Kill(pid); the structured plan/apply workflow refuses such
-// processes instead.
+// lookup is read-only, so it is also done in dry-run mode. Only a platform
+// WITHOUT identity support (strength "none") leaves the act without a
+// startTime, and only then does the legacy command fall back to the unchecked
+// Kill(pid). A lookup that failed for any other reason (permission, ...) is
+// kept as identErr and the process is not signalled. The structured
+// plan/apply workflow refuses processes without identity altogether.
 func captureIdentity(sys system, a *act) {
 	id, err := sys.ProcessIdentity(a.pid)
 	switch {
@@ -210,6 +229,12 @@ func captureIdentity(sys system, a *act) {
 		a.startTime = id.StartTime
 	case errors.Is(err, errProcessNotFound):
 		a.gone = true
+	case id.Strength == strengthNone && (err == nil || errors.Is(err, errNoIdentity)):
+		a.noIdentity = true
+	case err != nil:
+		a.identErr = err
+	default:
+		a.identErr = errors.New("the identity lookup returned no start time")
 	}
 }
 
@@ -233,8 +258,12 @@ func killNative(sys system, a *act) error {
 			return nil
 		}
 		return err
+	case a.noIdentity:
+		return sys.Kill(a.pid) // legacy fallback: this platform has no process identity
+	case a.identErr != nil:
+		return fmt.Errorf("cannot verify the identity of PID %d: %w", a.pid, a.identErr)
 	}
-	return sys.Kill(a.pid) // legacy fallback: no identity available
+	return errors.New("no process identity was captured")
 }
 
 func looksLikePermission(err error) bool {

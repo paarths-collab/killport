@@ -287,7 +287,7 @@ func buildPlan(sys system, snap *snapshot, opts planOptions, now time.Time) *pla
 				continue
 			}
 			if !c.FullID {
-				refuse(0, c.Name, fmt.Sprintf("docker reported the container id %q, which is not a full 64-hex id; cannot bind the action to an immutable id", c.ID))
+				refuse(0, c.Name, fmt.Sprintf("docker reported the container id %q, which is not a full 64-hex id; cannot bind the action to an immutable id", sanitizeProviderText(c.ID)))
 				continue
 			}
 			use(planResource{
@@ -308,7 +308,7 @@ func buildPlan(sys system, snap *snapshot, opts planOptions, now time.Time) *pla
 				reason := fmt.Sprintf("port %d is held by Docker infrastructure (%s, PID %d); stop the container that publishes it instead", port, o.Name, o.PID)
 				switch {
 				case snap.dockerErr != nil:
-					reason += "; the owning container is unknown because " + scrubText(snap.dockerErr.Error())
+					reason += "; the owning container is unknown because " + sanitizeProviderText(snap.dockerErr.Error())
 				case !snap.dockerAvail:
 					reason += "; docker was not found on PATH"
 				}
@@ -334,11 +334,11 @@ func buildPlan(sys system, snap *snapshot, opts planOptions, now time.Time) *pla
 					StartTime: o.StartTime, IdentityStrength: o.Strength, Action: actionSignal, Signal: signal,
 				})
 			case identDenied:
-				refuse(o.PID, o.Name, fmt.Sprintf("cannot bind process identity: permission denied (%v); try again with sudo / as Administrator", scrubText(o.IdentErr.Error())))
+				refuse(o.PID, o.Name, fmt.Sprintf("cannot bind process identity: permission denied (%v); try again with sudo / as Administrator", sanitizeProviderText(o.IdentErr.Error())))
 			default:
 				msg := "cannot bind process identity"
 				if o.IdentErr != nil {
-					msg += ": " + scrubText(o.IdentErr.Error())
+					msg += ": " + sanitizeProviderText(o.IdentErr.Error())
 				}
 				refuse(o.PID, o.Name, msg)
 			}
@@ -461,11 +461,18 @@ func validatePlan(doc *planDoc) error {
 		}
 		reqPorts[p] = true
 	}
-	if _, err := time.Parse(time.RFC3339, doc.CreatedAt); err != nil {
+	created, err := time.Parse(time.RFC3339, doc.CreatedAt)
+	if err != nil {
 		return bad("created_at is not an RFC 3339 time")
 	}
-	if _, err := time.Parse(time.RFC3339, doc.ExpiresAt); err != nil {
+	expires, err := time.Parse(time.RFC3339, doc.ExpiresAt)
+	if err != nil {
 		return bad("expires_at is not an RFC 3339 time")
+	}
+	// A plan lives at most maxPlanTTL; a forged far-future expiry would make
+	// a stale plan valid forever.
+	if expires.Before(created) || expires.Sub(created) > maxPlanTTL {
+		return bad("expires_at must not precede created_at or be more than %s after it", maxPlanTTL)
 	}
 	ids := map[string]bool{}
 	for _, r := range doc.Resources {
@@ -488,6 +495,9 @@ func validatePlan(doc *planDoc) error {
 			}
 			if r.PID <= 1 {
 				return bad("resource %q targets protected PID %d", r.ResourceID, r.PID)
+			}
+			if r.PID > maxPID {
+				return bad("resource %q has PID %d, which is out of range", r.ResourceID, r.PID)
 			}
 			if doc.OS == "windows" && r.PID == 4 {
 				return bad("resource %q targets the Windows System process", r.ResourceID)
@@ -551,9 +561,9 @@ func validatePlan(doc *planDoc) error {
 func resourceLine(r planResource) string {
 	ports := joinInts(r.Ports)
 	if r.Provider == providerDocker {
-		return fmt.Sprintf("%s  docker stop -t %d  %s  ports %s", r.ResourceID, r.GraceSeconds, orUnknown(r.Name), ports)
+		return humanText(fmt.Sprintf("%s  docker stop -t %d  %s  ports %s", r.ResourceID, r.GraceSeconds, orUnknown(r.Name), ports))
 	}
-	return fmt.Sprintf("%s  %s  pid %d (%s)  ports %s", r.ResourceID, r.Signal, r.PID, orUnknown(r.Name), ports)
+	return humanText(fmt.Sprintf("%s  %s  pid %d (%s)  ports %s", r.ResourceID, r.Signal, r.PID, orUnknown(r.Name), ports))
 }
 
 func refusalLine(r planRefusal) string {
@@ -564,7 +574,7 @@ func refusalLine(r planRefusal) string {
 	case r.Name != "":
 		who = r.Name
 	}
-	return fmt.Sprintf("port %d  %s: %s", r.Port, who, r.Reason)
+	return humanText(fmt.Sprintf("port %d  %s: %s", r.Port, who, r.Reason))
 }
 
 func joinInts(xs []int) string {

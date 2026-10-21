@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 
 	"github.com/fatih/color"
 )
@@ -29,6 +30,22 @@ type cliError struct {
 func (e *cliError) Error() string { return e.Msg }
 
 func usageErr(msg string) *cliError { return &cliError{Code: "usage", Exit: 2, Msg: msg} }
+
+// humanText makes a string safe to print to a terminal: control characters
+// (ESC and friends, so a hostile process name cannot move the cursor or fake
+// output), C1 controls and bidirectional overrides become '?', and invalid
+// UTF-8 becomes U+FFFD. It is meant for names and messages that come from
+// other programs, never for killport's own colour sequences.
+func humanText(s string) string {
+	s = validUTF8(s)
+	return strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsControl(r), r >= 0x202A && r <= 0x202E, r >= 0x2066 && r <= 0x2069:
+			return '?'
+		}
+		return r
+	}, s)
+}
 
 func writeJSON(w io.Writer, v any) {
 	data, err := json.MarshalIndent(v, "", "  ")
@@ -62,11 +79,13 @@ func containerName(r *killRow) string {
 	return strings.TrimPrefix(r.ProcessName, "[Docker] ")
 }
 
+// procDesc and containerName are used for human output only (and for the
+// error texts built from them), so they strip control characters.
 func procDesc(r *killRow) string {
 	if r.PID == "" {
-		return orUnknown(r.ProcessName)
+		return humanText(orUnknown(r.ProcessName))
 	}
-	return fmt.Sprintf("PID %s (%s)", r.PID, orUnknown(r.ProcessName))
+	return fmt.Sprintf("PID %s (%s)", r.PID, humanText(orUnknown(r.ProcessName)))
 }
 
 // printKill writes the kill results: JSON array or human lines that say
@@ -101,16 +120,16 @@ func (a *app) printKill(rows []*killRow) {
 			fmt.Fprintf(w, "[%s] Port %s is already free\n", warnMark(), r.Port)
 		case statusPlanned:
 			if r.Action == actionStop {
-				fmt.Fprintf(w, "[%s] [dry-run] Would stop Docker container %s (%s) publishing port %s\n", infoMark(), containerName(r), r.ContainerID, r.Port)
+				fmt.Fprintf(w, "[%s] [dry-run] Would stop Docker container %s (%s) publishing port %s\n", infoMark(), humanText(containerName(r)), humanText(r.ContainerID), r.Port)
 			} else {
 				fmt.Fprintf(w, "[%s] [dry-run] Would kill %s on port %s\n", infoMark(), procDesc(r), r.Port)
 			}
 		case statusKilled:
 			fmt.Fprintf(w, "[%s] Killed %s on port %s%s\n", okMark(), procDesc(r), r.Port, held(r))
 		case statusStopped:
-			fmt.Fprintf(w, "[%s] Stopped Docker container %s (%s) publishing port %s%s\n", okMark(), containerName(r), r.ContainerID, r.Port, held(r))
+			fmt.Fprintf(w, "[%s] Stopped Docker container %s (%s) publishing port %s%s\n", okMark(), humanText(containerName(r)), humanText(r.ContainerID), r.Port, held(r))
 		default:
-			fmt.Fprintf(w, "[%s] Port %s: %s\n", errMark(), r.Port, r.Error)
+			fmt.Fprintf(w, "[%s] Port %s: %s\n", errMark(), r.Port, humanText(r.Error))
 		}
 	}
 }
@@ -156,7 +175,7 @@ func (a *app) printCheck(rows []CheckResult, filtered bool) {
 			if r.SafeToKill {
 				verdict = "likely safe to stop (name heuristic)"
 			}
-			who := orUnknown(r.ProcessName)
+			who := humanText(orUnknown(r.ProcessName))
 			if r.PID != "" {
 				who += " (PID " + r.PID + ")"
 			} else if !r.IsDocker {

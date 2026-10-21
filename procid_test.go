@@ -249,12 +249,21 @@ func TestLegacyKillFallsBackWithoutIdentity(t *testing.T) {
 			t.Fatalf("expected the documented legacy Kill fallback: signals=%v kills=%v", f.signals, f.kills)
 		}
 	})
-	t.Run("lookup error", func(t *testing.T) {
+	// Review finding m7: the unchecked Kill(pid) is only for a platform WITHOUT
+	// identity support. A lookup that fails for another reason (permission
+	// denied, ...) used to fall back to it too, which defeats the identity
+	// check exactly when it matters; the row now fails with the real error and
+	// nothing is sent. (This subtest used to assert the old fallback.)
+	t.Run("lookup error sends nothing", func(t *testing.T) {
 		f, owner := scenario3000("linux")
 		f.identErrs[owner] = os.ErrPermission
-		code, _, _ := invoke(t, f, "--json", "3000")
-		if code != 0 || len(f.signals) != 0 || !reflect.DeepEqual(f.kills, []int{owner}) {
+		code, out, _ := invoke(t, f, "--json", "3000")
+		if code != 1 || len(f.signals) != 0 || len(f.kills) != 0 {
 			t.Fatalf("code=%d signals=%v kills=%v", code, f.signals, f.kills)
+		}
+		rows := decodeKill(t, out)
+		if len(rows) != 1 || rows[0].Status != statusFailed || rows[0].Killed || !strings.Contains(rows[0].Error, "cannot verify the identity") || !strings.Contains(rows[0].Error, "permission") {
+			t.Fatalf("rows = %+v", rows)
 		}
 	})
 }

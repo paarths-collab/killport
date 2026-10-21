@@ -87,6 +87,16 @@ func (osSystem) GOOS() string                         { return runtime.GOOS }
 func (osSystem) LookPath(name string) (string, error) { return exec.LookPath(name) }
 func (osSystem) Getpid() int                          { return os.Getpid() }
 func (osSystem) Sleep(d time.Duration)                { time.Sleep(d) }
+
+// SleepContext sleeps for d or until ctx is done, whichever comes first.
+func (osSystem) SleepContext(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
 func (osSystem) Now() time.Time                       { return time.Now() }
 func (osSystem) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
@@ -176,6 +186,21 @@ func runTool(ctx context.Context, sys system, timeout time.Duration, name string
 	return sys.Run(ctx, name, args...)
 }
 
+// sleepCtx sleeps through sys, but returns at once when ctx is done and, where
+// the system supports it, wakes up when ctx is cancelled.
+func sleepCtx(ctx context.Context, sys system, d time.Duration) {
+	if ctx.Err() != nil {
+		return
+	}
+	if s, ok := sys.(interface {
+		SleepContext(ctx context.Context, d time.Duration)
+	}); ok {
+		s.SleepContext(ctx, d)
+		return
+	}
+	sys.Sleep(d)
+}
+
 // verboseSystem logs every external command and kill to a writer (stderr).
 // Actions run concurrently, so writes to the shared writer are serialised.
 type verboseSystem struct {
@@ -205,6 +230,8 @@ func (v verboseSystem) Run(ctx context.Context, name string, args ...string) ([]
 	return out, err
 }
 
+func (v verboseSystem) SleepContext(ctx context.Context, d time.Duration) { sleepCtx(ctx, v.system, d) }
+
 func (v verboseSystem) Kill(pid int) error {
 	start := time.Now()
 	err := v.system.Kill(pid)
@@ -227,10 +254,19 @@ func (v verboseSystem) SignalIfSame(pid int, startTime string, force bool) error
 	return err
 }
 
+// readOnlyWrap puts the readOnlySystem guard around a system. Every read-only
+// command (legacy --dry-run, inspect, plan) goes through it; it is a variable
+// only so a test can observe that they do.
+var readOnlyWrap = func(s system) system { return readOnlySystem{system: s} }
+
 // readOnlySystem is the defence-in-depth wrapper used for --dry-run: any
 // attempt to kill a process or run a command that is not a known read-only
 // lookup panics, so a dry run can never mutate anything by accident.
 type readOnlySystem struct{ system }
+
+func (r readOnlySystem) SleepContext(ctx context.Context, d time.Duration) {
+	sleepCtx(ctx, r.system, d)
+}
 
 func (r readOnlySystem) Kill(pid int) error {
 	panic(fmt.Sprintf("dry-run attempted to kill PID %d", pid))

@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -52,7 +54,17 @@ type app struct {
 }
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, newOSSystem()))
+	// SIGINT / SIGTERM cancel the context; apply then stops starting new
+	// actions, looks at the outcome once and reports what it did. A second
+	// signal falls back to the default behaviour (terminate).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	code := runContext(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, newOSSystem())
+	stop()
+	os.Exit(code)
 }
 
 // wantsJSON scans raw arguments so even flag-parse errors can honour --json.
@@ -102,7 +114,28 @@ func run(args []string, stdout, stderr io.Writer, sys system) int {
 
 // runIO is run with an explicit standard input (used by `apply -`).
 func runIO(args []string, stdin io.Reader, stdout, stderr io.Writer, sys system) int {
+	return runContext(context.Background(), args, stdin, stdout, stderr, sys)
+}
+
+// runContext is runIO under a context: cancelling it interrupts a running
+// apply (see applyPlan). Only main wires it to signals.
+//
+// Standard output is buffered and written once the command finished, so a
+// panic anywhere below (it is recovered here) can never leave a half-written
+// document in front of the error document: stdout always holds exactly one
+// JSON document under --json. A panic exits with 1, never with the usage code.
+func runContext(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, sys system) (code int) {
+	var buf bytes.Buffer
+	final := stdout
+	stdout = &buf
 	a := &app{stdin: stdin, stdout: stdout, stderr: stderr}
+	defer func() {
+		if p := recover(); p != nil {
+			code = a.reportPanic(p, final, args)
+			return
+		}
+		_, _ = buf.WriteTo(final)
+	}()
 	exit := 0
 
 	cmd := &cobra.Command{
@@ -156,11 +189,18 @@ func runIO(args []string, stdin io.Reader, stdout, stderr io.Writer, sys system)
 		helpFlag, _ := cmd.Flags().GetBool("help")
 		versionFlag, _ := cmd.Flags().GetBool("version")
 		switch {
-		case helpFlag:
+		case helpFlag, len(cmd.Flags().Args()) > 0 && cmd.Flags().Args()[0] == "help":
+			// "killport help [command] --json" is help too.
+			target := cmd
+			if rest := cmd.Flags().Args(); !helpFlag && len(rest) > 1 {
+				if sub, _, ferr := cmd.Find(rest[1:]); ferr == nil {
+					target = sub
+				}
+			}
 			var usage bytes.Buffer
-			cmd.SetOut(&usage)
-			_ = cmd.Help()
-			cmd.SetOut(stdout)
+			target.SetOut(&usage)
+			_ = target.Help()
+			target.SetOut(stdout)
 			writeJSON(stdout, map[string]string{"usage": usage.String()})
 			return 0
 		case versionFlag:
@@ -169,7 +209,7 @@ func runIO(args []string, stdin io.Reader, stdout, stderr io.Writer, sys system)
 		}
 	}
 
-	if err := cmd.Execute(); err != nil {
+	if err := cmd.ExecuteContext(ctx); err != nil {
 		var ce *cliError
 		if !errors.As(err, &ce) {
 			// Flag-parse failures from cobra/pflag are usage errors.
@@ -180,6 +220,19 @@ func runIO(args []string, stdin io.Reader, stdout, stderr io.Writer, sys system)
 		return ce.Exit
 	}
 	return exit
+}
+
+// reportPanic reports a recovered panic: under --json as the single error
+// document on stdout, otherwise as one line on stderr. It never prints a
+// stack trace. The exit code is 1 (a runtime failure), not 2 (usage).
+func (a *app) reportPanic(p any, stdout io.Writer, args []string) int {
+	msg := "internal error: " + sanitizeProviderText(fmt.Sprint(p))
+	if a.opts.json || wantsJSON(args) {
+		writeJSON(stdout, map[string]string{"error": msg, "code": "internal", "exit_class": exitClassName(exitFailed)})
+	} else {
+		fmt.Fprintf(a.stderr, "[%s] %s\n", errMark(), msg)
+	}
+	return exitFailed
 }
 
 // execute is the body of the command. It returns the exit code for a normal
@@ -193,7 +246,7 @@ func (a *app) execute(ctx context.Context, args []string) (int, error) {
 	}
 	if a.opts.dryRun {
 		// Defence in depth: a dry run must never be able to mutate anything.
-		a.sys = readOnlySystem{system: a.sys}
+		a.sys = readOnlyWrap(a.sys)
 	}
 
 	var ports []int

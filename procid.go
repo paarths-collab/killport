@@ -1,10 +1,20 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
+
+// maxPID is the largest PID any supported OS can hand out (they all use at
+// most 32 bits, signed on Unix). Larger values are rejected before they can
+// be truncated to a smaller, different PID by a platform call.
+const maxPID = math.MaxInt32
+
+// errNoIdentity means the platform has no process identity support at all.
+var errNoIdentity = errors.New("process identity is not supported on this platform")
 
 // parseProcStat extracts the start time (field 22, in clock ticks since boot)
 // from the contents of /proc/<pid>/stat. The command name (field 2) is wrapped
@@ -32,9 +42,10 @@ func parseProcStat(data []byte) (string, error) {
 }
 
 // validSignalPID rejects PIDs that would address a process group or every
-// process (0, negative) instead of one process.
+// process (0, negative) instead of one process, and PIDs beyond 32 bits that a
+// platform call would silently truncate (2^32+4 must not become PID 4).
 func validSignalPID(pid int) error {
-	if pid <= 0 {
+	if pid <= 0 || pid > maxPID {
 		return fmt.Errorf("invalid PID %d", pid)
 	}
 	return nil

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -27,9 +28,27 @@ const (
 	epFree            = "free"
 	epBlockedOriginal = "blocked_by_original"
 	epBlockedNewOwner = "blocked_by_new_owner"
-	epNotVerifiable   = "not_verifiable"
+	// epBlockedRefused: the occupant is one the plan itself refused to act on
+	// (PID 1, Docker infrastructure, a hidden owner, ...). A fresh plan would
+	// refuse it again, so this is a failure, not "needs a fresh plan".
+	epBlockedRefused = "blocked_by_refused_owner"
+	epNotVerifiable  = "not_verifiable"
 
 	outcomePollInterval = 200 * time.Millisecond
+
+	briefObserveTimeout = 15 * time.Second
+
+	applyInterruptedPrefix = "apply interrupted"
+)
+
+// Time limits of one apply: grace plus applyWaveTimeout for every wave of
+// maxConcurrentActions resources, never more than maxApplyDuration. After the
+// limit (or a cancellation) no new action starts, and the outcome is observed
+// once for at most briefObserveTimeout. (Variables only so a test can shorten
+// them.)
+var (
+	applyWaveTimeout = 90 * time.Second
+	maxApplyDuration = 10 * time.Minute
 )
 
 // applyDoc is the apply result document.
@@ -111,25 +130,65 @@ func newApplyResource(r planResource, result, note string) applyResource {
 	}
 }
 
+// applyDeadline is the total time one apply may take: the grace period plus
+// applyWaveTimeout for every wave of concurrent actions, at most
+// maxApplyDuration.
+func applyDeadline(doc *planDoc) time.Duration {
+	waves := (len(doc.Resources) + maxConcurrentActions - 1) / maxConcurrentActions
+	if waves < 1 {
+		waves = 1
+	}
+	d := time.Duration(doc.Request.GraceSeconds)*time.Second + time.Duration(waves)*applyWaveTimeout
+	if d > maxApplyDuration {
+		d = maxApplyDuration
+	}
+	return d
+}
+
+// briefCtx returns ap.ctx while it is alive and otherwise a fresh short
+// context that ignores the cancellation, so the outcome can still be looked
+// at after an interrupt or a deadline.
+func (ap *applier) briefCtx() (context.Context, context.CancelFunc) {
+	if ap.ctx.Err() == nil {
+		return ap.ctx, func() {}
+	}
+	return context.WithTimeout(context.WithoutCancel(ap.ctx), briefObserveTimeout)
+}
+
 // applyPlan acts on the resources IN the plan (never on anything it finds
 // by itself), then observes the outcome. It returns the result document and
 // its exit code and the provider warnings seen after acting.
 func applyPlan(ctx context.Context, sys system, doc *planDoc) (*applyDoc, int, []string) {
 	startedAt := sys.Now()
+	ctx, cancel := context.WithTimeout(ctx, applyDeadline(doc))
+	defer cancel()
 	ap := &applier{ctx: ctx, sys: sys, doc: doc}
-	ap.pre = collect(ctx, sys, doc.Request.Protocol)
+	if ctx.Err() == nil {
+		ap.pre = collect(ctx, sys, doc.Request.Protocol)
+	} else {
+		// Interrupted before anything started: nothing will be acted on.
+		ap.pre = &snapshot{protocol: doc.Request.Protocol, tableHas: map[int]bool{}, dockerIDs: map[string]bool{}, idents: map[int]ownerObs{}}
+	}
 
 	results := make([]applyResource, len(doc.Resources))
 	attempted := make([]bool, len(doc.Resources))
+	skipped := false
 	sem := make(chan struct{}, maxConcurrentActions)
 	var wg sync.WaitGroup
 	for i := range doc.Resources {
-		wg.Add(1)
 		sem <- struct{}{}
+		if ctx.Err() != nil {
+			// Cancelled or out of time: do not start any further action.
+			<-sem
+			results[i] = newApplyResource(doc.Resources[i], resNotAttempted, applyInterruptedPrefix+" before this resource was acted on")
+			skipped = true
+			continue
+		}
+		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			results[i], attempted[i] = ap.act(doc.Resources[i])
+			results[i], attempted[i] = ap.safeAct(doc.Resources[i])
 		}(i)
 	}
 	wg.Wait()
@@ -147,6 +206,7 @@ func applyPlan(ctx context.Context, sys system, doc *planDoc) (*applyDoc, int, [
 	}
 
 	final, statuses := ap.observeOutcome(waitable)
+	interrupted := ctx.Err() != nil && (skipped || !allFree(statuses))
 
 	for i := range results {
 		results[i].VerifiedGone = ap.verifiedGone(doc.Resources[i], final)
@@ -159,13 +219,51 @@ func applyPlan(ctx context.Context, sys system, doc *planDoc) (*applyDoc, int, [
 		ObservationID: observationID(doc.Request, final.endpoints(doc.Request.Ports), final.dockerContext),
 	}
 	code := applyClass(out)
+	if interrupted {
+		// The results are partial: whatever was not done is not known to be
+		// harmless, so the class is "uncertain" (re-inspect, then re-plan).
+		code = exitUncertain
+		out.Error = applyInterruptedPrefix + " (" + ctxReason(ctx.Err()) + "); the results are partial"
+	}
 	out.ExitClass = exitClassName(code)
 	return out, code, final.warnings
+}
+
+func ctxReason(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "time limit reached"
+	}
+	return "cancelled"
+}
+
+func allFree(statuses []applyEndpoint) bool {
+	for _, e := range statuses {
+		if e.Status != epFree {
+			return false
+		}
+	}
+	return true
+}
+
+// safeAct is act with a panic turned into a failed resource: a panic on an
+// action goroutine would otherwise take the whole process down.
+func (ap *applier) safeAct(r planResource) (res applyResource, attempted bool) {
+	defer func() {
+		if p := recover(); p != nil {
+			res = newApplyResource(r, resFailed, "")
+			res.Error = sanitizeProviderText(fmt.Sprint("internal error: ", p))
+			attempted = true
+		}
+	}()
+	return ap.act(r)
 }
 
 // act performs one resource's action. The second result reports whether a
 // mutating call was actually issued.
 func (ap *applier) act(r planResource) (applyResource, bool) {
+	if ap.ctx.Err() != nil {
+		return newApplyResource(r, resNotAttempted, applyInterruptedPrefix+" before this resource was acted on"), false
+	}
 	if r.Provider == providerDocker {
 		return ap.stopContainer(r)
 	}
@@ -178,6 +276,9 @@ func (ap *applier) signalProcess(r planResource) (applyResource, bool) {
 		res.Error = "refusing to signal killport itself"
 		return res, false
 	}
+	if ap.noLongerHolds(r) {
+		return newApplyResource(r, resNotAttempted, "process no longer holds the planned ports"), false
+	}
 	force := r.Signal != sigTerm
 	err := ap.sys.SignalIfSame(r.PID, r.StartTime, force)
 	switch {
@@ -189,11 +290,35 @@ func (ap *applier) signalProcess(r planResource) (applyResource, bool) {
 		return newApplyResource(r, resNotAttempted, "process already exited"), false
 	}
 	res := newApplyResource(r, resFailed, "")
-	res.Error = err.Error()
+	res.Error = sanitizeProviderText(err.Error())
 	if looksLikePermission(err) {
 		res.Result = resPermissionDenied
 	}
 	return res, false
+}
+
+// noLongerHolds reports whether the pre-action observation PROVES that the
+// planned incarnation of a process is alive but no longer holds any planned
+// port (it closed its listener, another process took the port): signalling it
+// would then hit a process that no longer has anything to do with the plan.
+// It is false whenever that cannot be proven: any planned port without
+// complete visibility, any port where the PID is still seen as an owner (an
+// owner with another start time is for SignalIfSame to report), or a PID that
+// is gone or reused (SignalIfSame reports that too).
+func (ap *applier) noLongerHolds(r planResource) bool {
+	for _, port := range r.Ports {
+		e := ap.pre.endpoint(port)
+		if e.Visibility != visComplete {
+			return false
+		}
+		for _, o := range e.Owners {
+			if o.PID == r.PID {
+				return false
+			}
+		}
+	}
+	id, err := ap.sys.ProcessIdentity(r.PID)
+	return err == nil && id.StartTime == r.StartTime
 }
 
 // dockerLists reports whether the pre-action observation shows the container
@@ -217,7 +342,7 @@ func (ap *applier) stopContainer(r planResource) (applyResource, bool) {
 	switch {
 	case ap.pre.dockerErr != nil:
 		res := newApplyResource(r, resNotAttempted, "")
-		res.Error = "cannot confirm the container is still running: " + ap.pre.dockerErr.Error()
+		res.Error = "cannot confirm the container is still running: " + sanitizeProviderText(ap.pre.dockerErr.Error())
 		return res, false
 	case !ap.pre.dockerAvail:
 		res := newApplyResource(r, resNotAttempted, "")
@@ -239,21 +364,25 @@ func (ap *applier) stopContainer(r planResource) (applyResource, bool) {
 	}
 	msg := strings.ToLower(err.Error())
 	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		// The wrapper timed out: ask Docker whether the container is gone.
+	case errors.Is(err, context.DeadlineExceeded), ap.ctx.Err() != nil:
+		// The wrapper timed out, or apply was cancelled / ran out of time and
+		// the docker client was killed (the daemon may still finish the
+		// stop): ask Docker whether the container is gone.
 		again := &snapshot{protocol: ap.doc.Request.Protocol, dockerIDs: map[string]bool{}}
-		again.collectDocker(ap.ctx, ap.sys)
+		ctx, cancel := ap.briefCtx()
+		again.collectDocker(ctx, ap.sys)
+		cancel()
 		if again.dockerErr == nil && again.dockerAvail && !again.dockerIDs[r.ContainerID] {
 			return newApplyResource(r, resStopped, "docker stop timed out but the container is gone"), true
 		}
 		res := newApplyResource(r, resTimeoutUnknown, "")
-		res.Error = err.Error()
+		res.Error = sanitizeProviderText(err.Error())
 		return res, true
 	case strings.Contains(msg, "no such container"):
 		return newApplyResource(r, resNotAttempted, "container no longer running"), false
 	}
 	res := newApplyResource(r, resFailed, "")
-	res.Error = err.Error()
+	res.Error = sanitizeProviderText(err.Error())
 	if looksLikePermission(err) {
 		res.Result = resPermissionDenied
 	}
@@ -261,22 +390,20 @@ func (ap *applier) stopContainer(r planResource) (applyResource, bool) {
 }
 
 // observeOutcome polls until every planned endpoint is free or the grace
-// period ends. With nothing to wait for it observes exactly once.
+// period ends. With nothing to wait for it observes exactly once. After a
+// cancellation it observes once more (with a fresh short context) and stops.
 func (ap *applier) observeOutcome(wait bool) (*snapshot, []applyEndpoint) {
 	deadline := ap.sys.Now().Add(time.Duration(ap.doc.Request.GraceSeconds) * time.Second)
 	for {
-		snap := collect(ap.ctx, ap.sys, ap.doc.Request.Protocol)
+		ctx, cancel := ap.briefCtx()
+		interrupted := ap.ctx.Err() != nil
+		snap := collect(ctx, ap.sys, ap.doc.Request.Protocol)
+		cancel()
 		statuses := ap.classify(snap)
-		allFree := true
-		for _, e := range statuses {
-			if e.Status != epFree {
-				allFree = false
-			}
-		}
-		if allFree || !wait || !ap.sys.Now().Before(deadline) {
+		if allFree(statuses) || !wait || interrupted || !ap.sys.Now().Before(deadline) {
 			return snap, statuses
 		}
-		ap.sys.Sleep(outcomePollInterval)
+		sleepCtx(ap.ctx, ap.sys, outcomePollInterval)
 	}
 }
 
@@ -309,15 +436,38 @@ func (ap *applier) classify(snap *snapshot) []applyEndpoint {
 			}
 		}
 	}
+	// Owners the plan refused: by PID, by container name, or (PID 0, no name)
+	// an owner that was not visible at all.
+	refusedProc := map[int]map[int]bool{}
+	refusedCont := map[int]map[string]bool{}
+	refusedHidden := map[int]bool{}
+	for _, rf := range ap.doc.Refused {
+		switch {
+		case rf.PID > 0:
+			if refusedProc[rf.Port] == nil {
+				refusedProc[rf.Port] = map[int]bool{}
+			}
+			refusedProc[rf.Port][rf.PID] = true
+		case rf.Name != "":
+			if refusedCont[rf.Port] == nil {
+				refusedCont[rf.Port] = map[string]bool{}
+			}
+			refusedCont[rf.Port][rf.Name] = true
+		default:
+			refusedHidden[rf.Port] = true
+		}
+	}
 	out := make([]applyEndpoint, 0, len(ap.doc.Request.Ports))
 	for _, port := range ap.doc.Request.Ports {
 		e := snap.endpoint(port)
 		var holders []holder
-		original, other, unknown := false, false, false
+		original, other, unknown, refused := false, false, false, false
 		for _, o := range e.Owners {
 			holders = append(holders, holder{PID: o.PID, Name: o.Name})
 			pr, planned := plannedProc[port][o.PID]
 			switch {
+			case refusedProc[port][o.PID]:
+				refused = true
 			case isDockerInfra(o.Name) && len(e.Containers) > 0:
 				// The port proxy of a container that is still listed; the
 				// container itself is judged below.
@@ -334,6 +484,8 @@ func (ap *applier) classify(snap *snapshot) []applyEndpoint {
 		for _, c := range e.Containers {
 			holders = append(holders, holder{ContainerID: c.ID, Name: c.Name})
 			switch cr, planned := plannedCont[port][c.ID]; {
+			case refusedCont[port][c.Name] && !planned:
+				refused = true
 			case planned && cr.unsure:
 				unknown = true
 			case planned:
@@ -342,10 +494,15 @@ func (ap *applier) classify(snap *snapshot) []applyEndpoint {
 				other = true
 			}
 		}
+		if e.Hidden && refusedHidden[port] {
+			refused = true
+		}
 		var status string
 		switch {
 		case original:
 			status = epBlockedOriginal
+		case refused:
+			status = epBlockedRefused
 		case other:
 			status = epBlockedNewOwner
 		case unknown, e.Visibility != visComplete:
@@ -393,7 +550,7 @@ func applyClass(d *applyDoc) int {
 	}
 	for _, e := range d.Endpoints {
 		switch e.Status {
-		case epBlockedOriginal:
+		case epBlockedOriginal, epBlockedRefused:
 			code = worseExit(code, exitFailed)
 		case epNotVerifiable:
 			code = worseExit(code, exitUncertain)

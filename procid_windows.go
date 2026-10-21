@@ -11,7 +11,6 @@ import (
 const (
 	processTerminate            = 0x0001
 	processQueryLimitedInfo     = 0x1000
-	stillActive                 = 259
 	errorInvalidParameterWindow = syscall.Errno(87)
 )
 
@@ -32,15 +31,33 @@ func openForIdentity(pid int) (syscall.Handle, error) {
 	return h, nil
 }
 
+// processExited reports whether the process behind h has exited. A process
+// handle is signalled exactly when the process has terminated, so a zero-time
+// wait is the reliable test. (GetExitCodeProcess == STILL_ACTIVE, 259, is not:
+// a process may legitimately exit with code 259.)
+func processExited(h syscall.Handle) (bool, error) {
+	ev, err := syscall.WaitForSingleObject(h, 0)
+	switch ev {
+	case syscall.WAIT_OBJECT_0:
+		return true, nil
+	case syscall.WAIT_TIMEOUT:
+		return false, nil
+	}
+	if err == nil {
+		err = fmt.Errorf("unexpected wait result %d", ev)
+	}
+	return false, err
+}
+
 // handleStartTime returns the creation FILETIME (decimal 100ns ticks) of the
 // process behind h, or errProcessNotFound if it has already exited (a handle
 // to an exited process stays valid until closed).
 func handleStartTime(h syscall.Handle, pid int) (string, error) {
-	var code uint32
-	if err := syscall.GetExitCodeProcess(h, &code); err != nil {
+	exited, err := processExited(h)
+	if err != nil {
 		return "", fmt.Errorf("querying process %d: %w", pid, err)
 	}
-	if code != stillActive {
+	if exited {
 		return "", errProcessNotFound
 	}
 	var creation, exit, kernel, user syscall.Filetime
@@ -86,6 +103,12 @@ func platformSignalIfSame(pid int, startTime string, force bool) error {
 	}
 	if err := syscall.TerminateProcess(h, 1); err != nil {
 		if errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+			// TerminateProcess on a handle whose process exited since the
+			// start-time check fails with ACCESS_DENIED, which is not a
+			// permission problem: the process is simply gone.
+			if exited, werr := processExited(h); werr == nil && exited {
+				return errProcessNotFound
+			}
 			return fmt.Errorf("terminating PID %d: %w", pid, os.ErrPermission)
 		}
 		return fmt.Errorf("terminating PID %d: %w", pid, err)

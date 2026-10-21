@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -109,7 +111,7 @@ func (a *app) workflowSystem(readOnly bool) system {
 		sys = newVerboseSystem(sys, a.stderr)
 	}
 	if readOnly {
-		sys = readOnlySystem{system: sys}
+		sys = readOnlyWrap(sys)
 	}
 	return sys
 }
@@ -136,7 +138,7 @@ func (a *app) warnAll(ws []string) {
 }
 
 func providerErrorLine(pe providerError) string {
-	return fmt.Sprintf("%s %s: %s", pe.Provider, pe.Category, pe.Message)
+	return humanText(fmt.Sprintf("%s %s: %s", pe.Provider, pe.Category, pe.Message))
 }
 
 // ---- inspect ---------------------------------------------------------------
@@ -276,10 +278,10 @@ func (a *app) renderInspect(doc inspectDoc) {
 			if o.IdentityStrength != "" {
 				id = "identity " + o.IdentityStrength
 			}
-			fmt.Fprintf(w, "  pid %d (%s)  %s\n", o.PID, orUnknown(o.Name), id)
+			fmt.Fprintf(w, "  pid %d (%s)  %s\n", o.PID, humanText(orUnknown(o.Name)), id)
 		}
 		for _, c := range e.Containers {
-			fmt.Fprintf(w, "  container %s  %s\n", c.Name, c.ContainerID)
+			fmt.Fprintf(w, "  container %s  %s\n", humanText(c.Name), humanText(c.ContainerID))
 		}
 		if e.Unattributed {
 			fmt.Fprintf(w, "  an occupying socket has no attributable owner (try sudo / Administrator)\n")
@@ -332,7 +334,7 @@ func (a *app) runPlan(ctx context.Context, args []string, opts planOptions, outp
 	if output != "" {
 		data, merr := json.MarshalIndent(doc, "", "  ")
 		if merr == nil {
-			merr = os.WriteFile(output, append(data, '\n'), 0o644)
+			merr = writePlanFile(output, append(data, '\n'))
 		}
 		if merr != nil {
 			return exitFailed, &cliError{Code: "write_failed", Exit: exitFailed, Msg: fmt.Sprintf("could not write the plan: %v", merr)}
@@ -344,6 +346,46 @@ func (a *app) runPlan(ctx context.Context, args []string, opts planOptions, outp
 	}
 	a.renderPlan(doc, output)
 	return code, nil
+}
+
+// writePlanFile writes a plan with owner-only permissions. It refuses to
+// write through a symbolic link (a planted link could redirect the write to
+// another file) and replaces an existing regular file atomically: the data goes
+// to a new 0600 file next to it, which is then renamed over the target, so a
+// link swapped in at the last moment is replaced rather than followed.
+func writePlanFile(path string, data []byte) error {
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symbolic link; refusing to write through it", path)
+		}
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("%s exists and is not a regular file", path)
+		}
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".killport-plan-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	if err := tmp.Chmod(0o600); err != nil && runtime.GOOS != "windows" {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		os.Remove(name)
+		return err
+	}
+	return nil
 }
 
 func (a *app) renderPlan(doc *planDoc, output string) {
@@ -456,7 +498,10 @@ func (a *app) printApply(res *applyDoc) {
 	}
 	w := a.stdout
 	fmt.Fprintf(w, "[%s] Apply plan %s\n", infoMark(), res.PlanID)
-	if res.Error != "" {
+	switch {
+	case strings.HasPrefix(res.Error, applyInterruptedPrefix):
+		fmt.Fprintf(w, "[%s] %s. Inspect the ports again before doing anything else.\n", errMark(), res.Error)
+	case res.Error != "":
 		fmt.Fprintf(w, "[%s] %s; nothing was attempted. Make a fresh plan.\n", errMark(), res.Error)
 	}
 	fmt.Fprintf(w, "Resources (%d):\n", len(res.Resources))
@@ -475,9 +520,9 @@ func (a *app) printApply(res *applyDoc) {
 		line := fmt.Sprintf("  %s %d: %s (visibility: %s)", e.Protocol, e.Port, e.Status, e.Visibility)
 		for _, h := range e.Holders {
 			if h.ContainerID != "" {
-				line += fmt.Sprintf("; held by container %s (%s)", h.Name, h.ContainerID)
+				line += humanText(fmt.Sprintf("; held by container %s (%s)", h.Name, h.ContainerID))
 			} else {
-				line += fmt.Sprintf("; held by pid %d (%s)", h.PID, orUnknown(h.Name))
+				line += humanText(fmt.Sprintf("; held by pid %d (%s)", h.PID, orUnknown(h.Name)))
 			}
 		}
 		fmt.Fprintln(w, line)

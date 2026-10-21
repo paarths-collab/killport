@@ -147,12 +147,19 @@ func collect(ctx context.Context, sys system, protocol string) *snapshot {
 		s.collectOwnersUnix(ctx, sys)
 	}
 	s.collectDocker(ctx, sys)
+	for i := range s.owners {
+		// Process names come from other programs (possibly in a legacy code
+		// page); make them valid UTF-8 before they reach any document.
+		s.owners[i].Process = validUTF8(s.owners[i].Process)
+	}
 	s.collectIdentities(sys)
 	return s
 }
 
+// warn records a warning. Warnings are derived from provider output and end
+// up on stderr and in the inspect document, so they are sanitised here.
 func (s *snapshot) warn(format string, args ...any) {
-	s.warnings = append(s.warnings, fmt.Sprintf(format, args...))
+	s.warnings = append(s.warnings, sanitizeProviderText(fmt.Sprintf(format, args...)))
 }
 
 // ---- socket table ---------------------------------------------------------
@@ -176,13 +183,16 @@ func (s *snapshot) collectTable(ctx context.Context, sys system) {
 	case "darwin":
 		var out []byte
 		out, err = runTool(ctx, sys, toolTimeout, "netstat", "-an", "-p", s.protocol)
-		if err == nil {
+		switch {
+		case err != nil:
+			err = fmt.Errorf("netstat failed: %w", err)
+		case !netstatHasTable(out):
+			err = &parseError{errNoNetstatTable}
+		default:
 			entries, err = parseMacNetstat(out, s.protocol)
 			if err != nil {
 				err = &parseError{err}
 			}
-		} else {
-			err = fmt.Errorf("netstat failed: %w", err)
 		}
 	default:
 		err = fmt.Errorf("socket table is not supported on %s", s.goos)
@@ -195,6 +205,25 @@ func (s *snapshot) collectTable(ctx context.Context, sys system) {
 	}
 	s.tableOK = true
 	s.tableHas = occupiedPorts(entries, s.protocol)
+}
+
+var errNoNetstatTable = errors.New("netstat produced no socket table (empty or unrecognised output)")
+
+// netstatHasTable reports whether netstat output looks like a socket table: a
+// "Proto ..." header line or at least one tcp/udp row. Empty output with exit
+// status 0 is a broken tool, not an empty machine.
+func netstatHasTable(out []byte) bool {
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		w := strings.ToLower(f[0])
+		if w == "proto" || strings.HasPrefix(w, "tcp") || strings.HasPrefix(w, "udp") {
+			return true
+		}
+	}
+	return false
 }
 
 // readProcTables reads /proc/net/{tcp,tcp6} or {udp,udp6}. The IPv4 table is
@@ -409,6 +438,14 @@ func (s *snapshot) collectWindows(ctx context.Context, sys system) {
 		s.addProviderError(provNetstat, err, false)
 		return
 	}
+	if !netstatHasTable(out) {
+		err := &parseError{errNoNetstatTable}
+		s.ownerErr = err
+		s.tableErr = err
+		s.warn("%v", err)
+		s.addProviderError(provNetstat, err, false)
+		return
+	}
 	rows := parseNetstatRows(string(out), s.protocol)
 	s.tableOK = true
 	hasPID := false
@@ -452,7 +489,7 @@ func (s *snapshot) collectDocker(ctx context.Context, sys system) {
 	s.containers = parseDockerPSFull(string(out), s.protocol)
 	for _, line := range strings.Split(string(out), "\n") {
 		if id, _, ok := strings.Cut(strings.TrimSpace(line), "|"); ok && strings.TrimSpace(id) != "" {
-			s.dockerIDs[strings.TrimSpace(id)] = true
+			s.dockerIDs[validUTF8(strings.TrimSpace(id))] = true
 		}
 	}
 }
@@ -484,7 +521,7 @@ func parseDockerPSFull(out, protocol string) []containerObs {
 		if len(parts) < 3 {
 			continue
 		}
-		id := strings.TrimSpace(parts[0])
+		id := validUTF8(strings.TrimSpace(parts[0]))
 		if id == "" {
 			continue
 		}
@@ -492,7 +529,7 @@ func parseDockerPSFull(out, protocol string) []containerObs {
 		if len(ports) == 0 {
 			continue
 		}
-		res = append(res, containerObs{ID: id, Name: strings.TrimSpace(parts[1]), Ports: ports, FullID: isFullContainerID(id)})
+		res = append(res, containerObs{ID: id, Name: validUTF8(strings.TrimSpace(parts[1])), Ports: ports, FullID: isFullContainerID(id)})
 	}
 	sort.SliceStable(res, func(i, j int) bool { return res[i].ID < res[j].ID })
 	return res
@@ -783,22 +820,65 @@ func (s *snapshot) addProviderError(provider string, err error, ownersOnly bool)
 	s.perrs = append(s.perrs, sp)
 }
 
+// Building blocks of the path scrubbers. A path segment may contain single
+// spaces ("John Smith", "Program Files (x86)") as long as a separator follows
+// it, which is what separates a path with spaces from a path followed by prose.
+const (
+	// pathWord is one word of a spaced path segment; ":" ends it so that
+	// "/x: failed to open /y" is not read as one segment.
+	pathWord = `(?:[^\s/\\:"'<>|()\[\]\x60,;]|\([^\s()]*\))+`
+	// pathMore is the rest of a path after its first separator: any number of
+	// (possibly spaced) segments each followed by a separator, then the last
+	// run of non-space characters.
+	pathMore = `(?:` + pathWord + `(?: ` + pathWord + `)*[\\/])*[^\s"'<>|)\]\x60,;]*`
+	// pathStart are the characters that may precede a path inside a message.
+	pathStart = `(^|[\s"'(\[=,:])`
+)
+
 var (
 	// scheme://rest, e.g. unix:///var/run/docker.sock or tcp://10.0.0.5:2375.
 	urlRe = regexp.MustCompile(`\b([A-Za-z][A-Za-z0-9+.-]*)://[^\s"'<>)\]\x60,;]*`)
+	// A quoted path: the whole quoted text is replaced (a quoted path may
+	// contain spaces), the quotes are kept.
+	quotedPathRes = []*regexp.Regexp{quotedPathRe(`"`), quotedPathRe(`'`), quotedPathRe(`\x60`)}
+	// Home-directory forms: ~/x, ~user/x, $HOME, ${HOME}/x, %USERPROFILE%\x.
+	tildePathRe = regexp.MustCompile(pathStart + `~[A-Za-z0-9._-]*[\\/]` + pathMore)
+	envPathRe   = regexp.MustCompile(pathStart + `(?i:\$\{?(?:HOME|USER|USERNAME|LOGNAME)\}?|%[A-Za-z_][A-Za-z0-9_]*%)(?:[\\/]` + pathMore + `)?`)
 	// A Windows drive path (C:\x, C:/x) or UNC path (\\host\share).
-	winPathRe = regexp.MustCompile(`(?:\b[A-Za-z]:[\\/]|\\\\)[^\s"'<>|)\]\x60,;]*`)
-	// An absolute Unix path: a "/" that starts a token (or follows one of
-	// the usual delimiters) and is followed by at least one more character.
-	unixPathRe = regexp.MustCompile(`(^|[\s"'(\[=,])/[^\s"'<>|)\]\x60,;]+`)
+	winPathRe = regexp.MustCompile(`(?:\b[A-Za-z]:[\\/]|\\\\)` + pathMore)
+	// An absolute Unix path: a "/" that starts a token (or follows one of the
+	// usual delimiters, ":" and "=" included) and is followed by at least one
+	// more character that is not another "/" (so "://" is not a path).
+	unixPathRe = regexp.MustCompile(pathStart + `/(?:` + pathWord + `(?: ` + pathWord + `)*[\\/])*[^\s/"'<>|)\]\x60,;][^\s"'<>|)\]\x60,;]*`)
+	// Address literals. Port numbers are left alone.
+	ipv4Re = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`)
+	ipv6Re = regexp.MustCompile(`(^|[^0-9A-Za-z:])(?i:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})(?:%[0-9A-Za-z._-]+)?`)
+	// Host names of the usual private zones, and user@host.
+	privateHostRe = regexp.MustCompile(`(?i)\b[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.(?:local|lan|internal|home|localdomain|corp|intranet)\b`)
+	userAtHostRe  = regexp.MustCompile(`[^\s@"'<>,;()\[\]\x60]+@[^\s@"'<>,;)\]\x60]+`)
 )
 
+// quotedPathRe matches q, a path start (drive, UNC, "/", ~, $VAR, %VAR%), the
+// rest of the quoted text, and the closing q.
+func quotedPathRe(q string) *regexp.Regexp {
+	rest := `[^` + q + `\n]`
+	return regexp.MustCompile(q + `((?:[A-Za-z]:[\\/]|\\\\|/` + rest + `|~[A-Za-z0-9._-]*[\\/]|\$\{?[A-Za-z]|%[A-Za-z_][A-Za-z0-9_]*%)` + rest + `*)` + q)
+}
+
+// validUTF8 replaces invalid UTF-8 in a string that came from outside the
+// process (a process name in a Windows OEM code page, say) so that it
+// survives a JSON round trip unchanged. Every provider-originated string that
+// ends up in a document goes through it (or through sanitizeProviderText).
+func validUTF8(s string) string { return strings.ToValidUTF8(s, "\uFFFD") }
+
 // sanitizeProviderText removes what must never leave the machine in a
-// document: URLs and hostnames and absolute paths (each becomes "<path>" or
-// "<host>"; user names normally appear only inside such paths, e.g.
-// /home/alice/...), and the result is at most 200 characters.
+// document or in human output: URLs and hostnames, absolute paths (including
+// quoted ones, ones with spaces, ~ and $HOME forms), IP address literals,
+// private host names and user@host pairs (each becomes a "<...>" marker; user
+// names normally appear only inside such paths, e.g. /home/alice/...), and the
+// result is at most 200 characters of valid UTF-8.
 func sanitizeProviderText(s string) string {
-	s = strings.Join(strings.Fields(scrubText(s)), " ")
+	s = humanText(strings.Join(strings.Fields(scrubText(s)), " "))
 	if utf8.RuneCountInString(s) > maxProviderMessage {
 		r := []rune(s)
 		s = string(r[:maxProviderMessage-3]) + "..."
@@ -806,8 +886,10 @@ func sanitizeProviderText(s string) string {
 	return s
 }
 
-// scrubText replaces URLs/hostnames and absolute paths; it does not shorten the text (used for text embedded in plan reasons).
+// scrubText applies the scrubbing of sanitizeProviderText without shortening
+// the text.
 func scrubText(s string) string {
+	s = validUTF8(s)
 	s = urlRe.ReplaceAllStringFunc(s, func(m string) string {
 		scheme, rest, _ := strings.Cut(m, "://")
 		if strings.HasPrefix(rest, "/") || scheme == "npipe" {
@@ -815,8 +897,17 @@ func scrubText(s string) string {
 		}
 		return scheme + "://<host>"
 	})
+	for i, q := range []string{`"`, `'`, "`"} {
+		s = quotedPathRes[i].ReplaceAllString(s, q+"<path>"+q)
+	}
+	s = tildePathRe.ReplaceAllString(s, "${1}<path>")
+	s = envPathRe.ReplaceAllString(s, "${1}<path>")
 	s = winPathRe.ReplaceAllString(s, "<path>")
 	s = unixPathRe.ReplaceAllString(s, "${1}<path>")
+	s = ipv4Re.ReplaceAllString(s, "<ip>")
+	s = ipv6Re.ReplaceAllString(s, "${1}<ip>")
+	s = privateHostRe.ReplaceAllString(s, "<host>")
+	s = userAtHostRe.ReplaceAllString(s, "<user@host>")
 	return s
 }
 
