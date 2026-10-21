@@ -54,6 +54,14 @@ type act struct {
 	name      string
 	container container
 	err       error
+
+	// Native process identity captured at enumeration time (planKill).
+	// startTime is the opaque token from system.ProcessIdentity; it is empty
+	// when no identity is available, in which case the LEGACY command falls
+	// back to the unchecked Kill(pid). gone means the process had already
+	// exited when its identity was looked up.
+	startTime string
+	gone      bool
 }
 
 // ownerKey identifies one owner of one port: a native PID (cid empty) or a
@@ -177,6 +185,7 @@ func planKill(sys system, ports []int, lst listing, dk dockerState, dryRun bool)
 			a := procAct[l.PID]
 			if a == nil {
 				a = &act{kind: actionKill, pid: l.PID, name: l.Process}
+				captureIdentity(sys, a)
 				procAct[l.PID] = a
 				acts = append(acts, a)
 			}
@@ -186,6 +195,46 @@ func planKill(sys system, ports []int, lst listing, dk dockerState, dryRun bool)
 		}
 	}
 	return rows, acts
+}
+
+// captureIdentity records the process start time for a native action. The
+// lookup is read-only, so it is also done in dry-run mode. When the identity
+// is unavailable (strength "none" or a lookup error other than "not found")
+// the act keeps an empty startTime and the legacy command falls back to the
+// unchecked Kill(pid); the structured plan/apply workflow refuses such
+// processes instead.
+func captureIdentity(sys system, a *act) {
+	id, err := sys.ProcessIdentity(a.pid)
+	switch {
+	case err == nil && id.Strength != strengthNone && id.StartTime != "":
+		a.startTime = id.StartTime
+	case errors.Is(err, errProcessNotFound):
+		a.gone = true
+	}
+}
+
+// errChangedBeforeKill is the row error when the PID now belongs to a
+// different process than the one that was enumerated.
+var errChangedBeforeKill = errors.New("process changed between lookup and kill; nothing was signalled")
+
+// killNative signals the process captured at enumeration time with SIGKILL
+// (TerminateProcess on Windows), re-validating its identity first. A process
+// that is already gone counts as success.
+func killNative(sys system, a *act) error {
+	switch {
+	case a.gone:
+		return nil
+	case a.startTime != "":
+		err := sys.SignalIfSame(a.pid, a.startTime, true)
+		switch {
+		case errors.Is(err, errIdentityChanged):
+			return errChangedBeforeKill
+		case errors.Is(err, errProcessNotFound):
+			return nil
+		}
+		return err
+	}
+	return sys.Kill(a.pid) // legacy fallback: no identity available
 }
 
 func looksLikePermission(err error) bool {
@@ -214,8 +263,12 @@ func execute(ctx context.Context, sys system, acts []*act, dryRun bool) {
 			defer func() { <-sem }()
 			switch a.kind {
 			case actionKill:
-				err := sys.Kill(a.pid)
-				if err != nil && !errors.Is(err, os.ErrProcessDone) {
+				err := killNative(sys, a)
+				switch {
+				case err == nil || errors.Is(err, os.ErrProcessDone):
+				case errors.Is(err, errChangedBeforeKill):
+					a.err = err
+				default:
 					msg := fmt.Sprintf("failed to kill PID %d (%s): %v", a.pid, orUnknown(a.name), err)
 					if looksLikePermission(err) {
 						msg += " (try again with sudo / as Administrator)"

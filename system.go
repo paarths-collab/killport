@@ -25,10 +25,59 @@ type system interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 	// Kill forcibly terminates a process (SIGKILL on Unix, TerminateProcess
 	// on Windows).
+	//
+	// Deprecated: Kill signals whatever currently owns the PID. Use
+	// ProcessIdentity + SignalIfSame, which cannot hit a process that reused
+	// the PID. Kill remains only as the fallback of the legacy command when no
+	// process identity is available on the platform.
 	Kill(pid int) error
 	Getpid() int
 	Sleep(d time.Duration)
+
+	// ProcessIdentity returns a token that identifies the process currently
+	// running under pid, so a later SignalIfSame can tell whether the PID was
+	// reused. It returns errProcessNotFound when no such process exists;
+	// permission failures wrap os.ErrPermission. It never mutates anything.
+	ProcessIdentity(pid int) (procIdentity, error)
+	// SignalIfSame delivers SIGTERM (force=false) or SIGKILL (force=true) to
+	// pid, but only if the live process still has the given start time. It
+	// returns errIdentityChanged (and sends nothing) if the process differs,
+	// errProcessNotFound if it is gone. Where the OS allows (Linux pidfd,
+	// Windows handle) the check and the signal are atomic. On Windows force is
+	// ignored: the process is always terminated.
+	SignalIfSame(pid int, startTime string, force bool) error
+	// ReadFile reads a file (used for /proc/net/*).
+	ReadFile(path string) ([]byte, error)
+	// Now is the current wall-clock time.
+	Now() time.Time
 }
+
+// procIdentity identifies one incarnation of a process.
+type procIdentity struct {
+	PID int
+	// StartTime is an OPAQUE token (decimal clock ticks on Linux, "sec.usec"
+	// on macOS, decimal FILETIME on Windows). Callers may only compare it for
+	// equality and pass it back to SignalIfSame; its format is not stable and
+	// differs per platform.
+	StartTime string
+	// Strength is how strongly the platform can bind a later signal to this
+	// incarnation: "pidfd" and "handle" are atomic, "start_time" compares then
+	// signals (a tiny race remains), "none" means no identity is available.
+	Strength string
+}
+
+// Identity strengths.
+const (
+	strengthPidfd     = "pidfd"
+	strengthHandle    = "handle"
+	strengthStartTime = "start_time"
+	strengthNone      = "none"
+)
+
+var (
+	errProcessNotFound = errors.New("process not found")
+	errIdentityChanged = errors.New("process identity changed (PID reused)")
+)
 
 type osSystem struct{}
 
@@ -38,6 +87,14 @@ func (osSystem) GOOS() string                         { return runtime.GOOS }
 func (osSystem) LookPath(name string) (string, error) { return exec.LookPath(name) }
 func (osSystem) Getpid() int                          { return os.Getpid() }
 func (osSystem) Sleep(d time.Duration)                { time.Sleep(d) }
+func (osSystem) Now() time.Time                       { return time.Now() }
+func (osSystem) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+func (osSystem) ProcessIdentity(pid int) (procIdentity, error) { return platformProcessIdentity(pid) }
+
+func (osSystem) SignalIfSame(pid int, startTime string, force bool) error {
+	return platformSignalIfSame(pid, startTime, force)
+}
 
 func (osSystem) Kill(pid int) error {
 	p, err := os.FindProcess(pid)
@@ -159,6 +216,17 @@ func (v verboseSystem) Kill(pid int) error {
 	return err
 }
 
+func (v verboseSystem) SignalIfSame(pid int, startTime string, force bool) error {
+	start := time.Now()
+	err := v.system.SignalIfSame(pid, startTime, force)
+	status := "ok"
+	if err != nil {
+		status = "error: " + err.Error()
+	}
+	v.logf("[%s] kill: pid %d start %s force=%t (%s, %s)\n", debugLabel(), pid, startTime, force, time.Since(start).Round(time.Microsecond), status)
+	return err
+}
+
 // readOnlySystem is the defence-in-depth wrapper used for --dry-run: any
 // attempt to kill a process or run a command that is not a known read-only
 // lookup panics, so a dry run can never mutate anything by accident.
@@ -167,6 +235,12 @@ type readOnlySystem struct{ system }
 func (r readOnlySystem) Kill(pid int) error {
 	panic(fmt.Sprintf("dry-run attempted to kill PID %d", pid))
 }
+
+func (r readOnlySystem) SignalIfSame(pid int, startTime string, force bool) error {
+	panic(fmt.Sprintf("dry-run attempted to signal PID %d", pid))
+}
+
+// ProcessIdentity, ReadFile and Now are read-only and pass through.
 
 func (r readOnlySystem) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	switch name {

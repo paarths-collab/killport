@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -62,10 +63,47 @@ type fakeSystem struct {
 	// deadlines records, per command line, how much time the context passed
 	// to Run had left (only for contexts that have a deadline).
 	deadlines map[string]time.Duration
+
+	// Scripted process table (see setProc). Unregistered PIDs are treated as
+	// live processes with a synthetic start time unless strictProcs is set.
+	procs       map[int]*fakeProc
+	strictProcs bool
+	identErrs   map[int]error // ProcessIdentity error per PID (e.g. permission)
+	// signals records every signal actually DELIVERED by SignalIfSame, i.e.
+	// after the identity check passed. A refused (identity changed / gone)
+	// call records nothing. kills additionally mirrors the PIDs of delivered
+	// signals so legacy assertions on f.kills keep working; killErrs is
+	// consulted by both Kill and SignalIfSame.
+	signals []fakeSignal
+	// onSignal, if set, runs after a signal was delivered (outside the lock)
+	// and may mutate the world, e.g. exitProc or a supervisor rebinding.
+	onSignal func(f *fakeSystem, s fakeSignal)
+
+	// Files served by ReadFile (path -> content).
+	files map[string][]byte
+	// Fake clock returned by Now; advanced by Sleep and advance().
+	now time.Time
 }
 
+type fakeProc struct {
+	start    string
+	name     string
+	strength string
+	gone     bool
+}
+
+type fakeSignal struct {
+	PID       int
+	StartTime string
+	Force     bool
+}
+
+// fakeEpoch is the initial value of the fake clock.
+var fakeEpoch = time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+
 func newFake(goos string, tools ...string) *fakeSystem {
-	f := &fakeSystem{goos: goos, tools: map[string]bool{}, responses: map[string][]fakeResp{}, killErrs: map[int]error{}, deadlines: map[string]time.Duration{}}
+	f := &fakeSystem{goos: goos, tools: map[string]bool{}, responses: map[string][]fakeResp{}, killErrs: map[int]error{}, deadlines: map[string]time.Duration{},
+		procs: map[int]*fakeProc{}, identErrs: map[int]error{}, files: map[string][]byte{}, now: fakeEpoch}
 	for _, t := range tools {
 		f.tools[t] = true
 	}
@@ -87,10 +125,139 @@ func (f *fakeSystem) LookPath(name string) (string, error) {
 	return "", errors.New("not found")
 }
 
-func (f *fakeSystem) Sleep(time.Duration) {
+func (f *fakeSystem) Sleep(d time.Duration) {
 	f.mu.Lock()
 	f.sleeps++
+	f.now = f.now.Add(d)
 	f.mu.Unlock()
+}
+
+func (f *fakeSystem) Now() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.now
+}
+
+// setNow sets the fake clock; advance moves it forward.
+func (f *fakeSystem) setNow(t time.Time) {
+	f.mu.Lock()
+	f.now = t
+	f.mu.Unlock()
+}
+
+func (f *fakeSystem) advance(d time.Duration) {
+	f.mu.Lock()
+	f.now = f.now.Add(d)
+	f.mu.Unlock()
+}
+
+func (f *fakeSystem) ReadFile(path string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.files[path]
+	if !ok {
+		return nil, &os.PathError{Op: "open", Path: path, Err: os.ErrNotExist}
+	}
+	return append([]byte(nil), b...), nil
+}
+
+// setProc registers (or re-registers) a live process with the given opaque
+// start time and name. Strength defaults to "start_time".
+func (f *fakeSystem) setProc(pid int, startTime, name string) *fakeSystem {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.procs[pid] = &fakeProc{start: startTime, name: name, strength: strengthStartTime}
+	return f
+}
+
+// setProcStrength overrides the identity strength reported for pid, e.g.
+// strengthNone to simulate a platform without identity support.
+func (f *fakeSystem) setProcStrength(pid int, strength string) *fakeSystem {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.procs[pid]; p != nil {
+		p.strength = strength
+	} else {
+		f.procs[pid] = &fakeProc{start: "fake-" + strconv.Itoa(pid), strength: strength}
+	}
+	return f
+}
+
+// exitProc marks pid as exited: ProcessIdentity and SignalIfSame report
+// errProcessNotFound afterwards.
+func (f *fakeSystem) exitProc(pid int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if p := f.procs[pid]; p != nil {
+		p.gone = true
+		return
+	}
+	f.procs[pid] = &fakeProc{gone: true, strength: strengthStartTime}
+}
+
+// replaceProc simulates PID reuse: the same PID now belongs to a new live
+// process with a different start time.
+func (f *fakeSystem) replaceProc(pid int, newStart string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	name := ""
+	if p := f.procs[pid]; p != nil {
+		name = p.name
+	}
+	f.procs[pid] = &fakeProc{start: newStart, name: name, strength: strengthStartTime}
+}
+
+// lookupProc returns the live entry for pid, auto-registering unknown PIDs
+// unless strictProcs. Caller holds f.mu.
+func (f *fakeSystem) lookupProc(pid int) *fakeProc {
+	p := f.procs[pid]
+	if p == nil && !f.strictProcs {
+		p = &fakeProc{start: "fake-" + strconv.Itoa(pid), strength: strengthStartTime}
+		f.procs[pid] = p
+	}
+	if p == nil || p.gone {
+		return nil
+	}
+	return p
+}
+
+func (f *fakeSystem) ProcessIdentity(pid int) (procIdentity, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.identErrs[pid]; err != nil {
+		return procIdentity{}, err
+	}
+	p := f.lookupProc(pid)
+	if p == nil {
+		return procIdentity{}, errProcessNotFound
+	}
+	if p.strength == strengthNone {
+		return procIdentity{PID: pid, Strength: strengthNone}, nil
+	}
+	return procIdentity{PID: pid, StartTime: p.start, Strength: p.strength}, nil
+}
+
+func (f *fakeSystem) SignalIfSame(pid int, startTime string, force bool) error {
+	f.mu.Lock()
+	p := f.lookupProc(pid)
+	if p == nil {
+		f.mu.Unlock()
+		return errProcessNotFound
+	}
+	if p.start != startTime {
+		f.mu.Unlock()
+		return errIdentityChanged
+	}
+	s := fakeSignal{PID: pid, StartTime: startTime, Force: force}
+	f.signals = append(f.signals, s)
+	f.kills = append(f.kills, pid)
+	err := f.killErrs[pid]
+	hook := f.onSignal
+	f.mu.Unlock()
+	if hook != nil {
+		hook(f, s)
+	}
+	return err
 }
 
 func (f *fakeSystem) Kill(pid int) error {
