@@ -1,0 +1,18 @@
+{
+  "name": "33-linux-docker-one-container-two-ports",
+  "description": "One container publishes 3000 and 3001 (docker-proxy PID 900 holds both). The plan has one docker_stop resource on the full 64-hex id, with both ports, and no refusals.",
+  "contract": "docker",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000", "3001"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "lsof_proxy_two_ports.txt"},
+    "docker ps --no-trunc --format {{.ID}}|{{.Names}}|{{.Ports}}": {"stdout_file": "docker_ps_full.txt"}
+  },
+  "files": {"/proc/net/tcp": "tcp_proxy_ports.txt"},
+  "procs": [{"pid": 900, "start": "100900", "name": "docker-proxy"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 1, "resources.0.provider": "docker", "resources.0.container_id": "00000000000000000000000000000000000000000000000000000000000a11ce", "resources.0.ports": [3000, 3001], "resources.0.action": "docker_stop", "endpoints.#": 2, "refused.#": 0},
+    "no_mutation": true
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "43-linux-inspect-json-owner",
+  "description": "inspect --json (read-only observation) on real Linux captures: the owner of 3000 is python3 PID 277 with its identity, and the visibility is complete.",
+  "contract": "visibility",
+  "platform": "linux",
+  "args": ["inspect", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "../../linux/lsof_listen.txt"}
+  },
+  "files": {"/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt", "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"},
+  "procs": [{"pid": 277, "start": "100277", "name": "python3"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"kind": "killport.inspect", "exit_class": "ok", "endpoints.0.port": 3000, "endpoints.0.occupied": true, "endpoints.0.visibility": "complete_for_requested_scope", "endpoints.0.owners.0.pid": 277, "endpoints.0.owners.0.name": "python3"},
+    "no_mutation": true
+  }
+}

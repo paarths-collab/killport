@@ -1,0 +1,18 @@
+{
+  "name": "20-udp-connected-remote-port-ignored",
+  "description": "Connected UDP socket local 127.0.0.1:5000 -> remote :3000 (chrome). With --protocol udp 3000 the remote port must not match: the port is free.",
+  "contract": "udp-owner",
+  "platform": "linux",
+  "args": ["plan", "--json", "--protocol", "udp", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iUDP -FpcnT": {"stdout_file": "lsof_udp_connected.txt"}
+  },
+  "files": {"/proc/net/udp": "udp_connected_remote.txt"},
+  "procs": [{"pid": 300, "start": "100300", "name": "chrome"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 0, "endpoints.0.occupied": false, "endpoints.0.visibility": "complete_for_requested_scope"},
+    "signals": [],
+    "no_mutation": true
+  }
+}

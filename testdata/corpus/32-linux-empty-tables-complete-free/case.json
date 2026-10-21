@@ -1,0 +1,16 @@
+{
+  "name": "32-linux-empty-tables-complete-free",
+  "description": "A valid but empty socket table (header only) and no lsof listeners. The port is free with complete visibility, which is different from none_visible.",
+  "contract": "visibility",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"exit": 1, "stdout": "", "stderr": ""}
+  },
+  "files": {"/proc/net/tcp": "tcp_header_only.txt"},
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 0, "endpoints.0.occupied": false, "endpoints.0.visibility": "complete_for_requested_scope"},
+    "no_mutation": true
+  }
+}

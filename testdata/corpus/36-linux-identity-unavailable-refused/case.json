@@ -1,0 +1,17 @@
+{
+  "name": "36-linux-identity-unavailable-refused",
+  "description": "The platform cannot report a process identity for PID 277 (strength none). The owner cannot be bound to a start time, so it is refused rather than signalled by PID alone.",
+  "contract": "identity",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "../../linux/lsof_listen.txt"}
+  },
+  "files": {"/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt", "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"},
+  "procs": [{"pid": 277, "start": "100277", "name": "python3", "strength": "none"}],
+  "expect": {
+    "exit": 1,
+    "json_paths": {"resources.#": 0, "refused.0.pid": 277, "refused.0.name": "python3"},
+    "no_mutation": true
+  }
+}

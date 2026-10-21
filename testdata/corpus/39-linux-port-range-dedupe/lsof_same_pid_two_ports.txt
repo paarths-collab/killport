@@ -1,0 +1,8 @@
+p100
+cnode
+f20
+n*:3000
+TST=LISTEN
+f21
+n*:3001
+TST=LISTEN

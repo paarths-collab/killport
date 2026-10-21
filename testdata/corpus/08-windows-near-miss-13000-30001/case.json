@@ -1,0 +1,16 @@
+{
+  "name": "08-windows-near-miss-13000-30001",
+  "description": "Real-format Windows netstat: only node.exe (PID 4120) on 3000 is selected; the 13000 and 30001 listeners are not.",
+  "contract": "tcp-listener",
+  "platform": "windows",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "netstat -ano": {"stdout_file": "../../windows/netstat_ano.txt"},
+    "tasklist /FO CSV /NH": {"stdout_file": "../../windows/tasklist_csv.txt"}
+  },
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 1, "resources.0.pid": 4120, "resources.0.name": "node.exe", "resources.0.ports": [3000]},
+    "no_mutation": true
+  }
+}

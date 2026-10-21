@@ -1,0 +1,17 @@
+{
+  "name": "14-linux-established-rows-ignored",
+  "description": "Real Linux capture of lsof -iTCP (all states) served as the LISTEN answer: the ESTABLISHED rows are filtered out and only PID 277 is an owner.",
+  "contract": "tcp-listener",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "../../linux/lsof_all_tcp.txt"}
+  },
+  "files": {"/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt", "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"},
+  "procs": [{"pid": 277, "start": "100277", "name": "python3"}, {"pid": 284, "start": "100284", "name": "nc"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 1, "resources.0.pid": 277, "endpoints.0.occupied": true},
+    "no_mutation": true
+  }
+}

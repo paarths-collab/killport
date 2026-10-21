@@ -1,0 +1,16 @@
+{
+  "name": "21-udp-tcp-contract-ignores-udp",
+  "description": "The real UDP bound socket on 9999 (PID 281) exists in /proc/net/udp. The default TCP contract ignores it and reports the port free.",
+  "contract": "udp-owner",
+  "platform": "linux",
+  "args": ["plan", "--json", "9999"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"exit": 1, "stdout": "", "stderr": ""}
+  },
+  "files": {"/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt"},
+  "expect": {
+    "exit": 0,
+    "json_paths": {"request.protocol": "tcp", "resources.#": 0, "endpoints.0.occupied": false},
+    "no_mutation": true
+  }
+}

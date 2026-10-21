@@ -1,0 +1,28 @@
+{
+  "name": "34-windows-apply-docker-stop-once",
+  "description": "Plan then apply on Windows: one container publishes 3000 and 3001 through com.docker.backend (PID 900). docker stop runs exactly once on the full id, the endpoints verify free, and the docker-proxy is never signalled.",
+  "contract": "docker",
+  "platform": "windows",
+  "args": ["apply", "--json", "@plan"],
+  "commands": {
+    "netstat -ano": [
+      {"stdout_file": "netstat_before.txt"},
+      {"stdout_file": "netstat_before.txt"},
+      {"stdout_file": "netstat_after.txt"}
+    ],
+    "tasklist /FO CSV /NH": {"stdout_file": "tasklist_docker.txt"},
+    "docker ps --no-trunc --format {{.ID}}|{{.Names}}|{{.Ports}}": [
+      {"stdout_file": "docker_ps_full.txt"},
+      {"stdout_file": "docker_ps_full.txt"},
+      {"stdout": ""}
+    ],
+    "docker stop -t 10 00000000000000000000000000000000000000000000000000000000000a11ce": {"exit": 0, "stdout": "00000000000000000000000000000000000000000000000000000000000a11ce"}
+  },
+  "apply_after_plan": {"plan_args": ["plan", "--json", "3000", "3001"]},
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.0.result": "stopped", "resources.0.verified_gone": true, "endpoints.0.status": "free", "endpoints.1.status": "free", "actions_executed": 1},
+    "docker_stops": ["00000000000000000000000000000000000000000000000000000000000a11ce"],
+    "signals": []
+  }
+}

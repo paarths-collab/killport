@@ -1,0 +1,14 @@
+{
+  "name": "23-linux-no-lsof-no-ss-missing-dependency",
+  "description": "Neither lsof nor ss is installed. The plan refuses before observing anything and reports missing_dependency as failed.",
+  "contract": "errors",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "tools": [],
+  "commands": {},
+  "expect": {
+    "exit": 1,
+    "json_paths": {"code": "missing_dependency", "exit_class": "failed"},
+    "no_mutation": true
+  }
+}

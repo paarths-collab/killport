@@ -1,0 +1,16 @@
+{
+  "name": "15-linux-timewait-established-free",
+  "description": "The socket table holds only an ESTABLISHED client of 3000 and a TIME_WAIT on local 3000. Neither is a listener, so the port is free with complete visibility.",
+  "contract": "tcp-listener",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"exit": 1, "stdout": "", "stderr": ""}
+  },
+  "files": {"/proc/net/tcp": "tcp_timewait.txt"},
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 0, "endpoints.0.occupied": false, "endpoints.0.visibility": "complete_for_requested_scope"},
+    "no_mutation": true
+  }
+}

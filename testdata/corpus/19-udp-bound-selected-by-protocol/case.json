@@ -1,0 +1,17 @@
+{
+  "name": "19-udp-bound-selected-by-protocol",
+  "description": "Real Linux UDP captures: with --protocol udp, port 9999 selects the bound socket of PID 281 by its local port.",
+  "contract": "udp-owner",
+  "platform": "linux",
+  "args": ["plan", "--json", "--protocol", "udp", "9999"],
+  "commands": {
+    "lsof -nP +c 0 -iUDP -FpcnT": {"stdout_file": "../../sockets/linux_lsof_udp.txt"}
+  },
+  "files": {"/proc/net/udp": "../../sockets/linux_proc_net_udp.txt", "/proc/net/udp6": "../../sockets/linux_proc_net_udp6.txt"},
+  "procs": [{"pid": 281, "start": "100281", "name": "python3"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"request.protocol": "udp", "request.scope": "bound", "resources.#": 1, "resources.0.pid": 281, "endpoints.0.protocol": "udp", "endpoints.0.port": 9999, "endpoints.0.occupied": true},
+    "no_mutation": true
+  }
+}

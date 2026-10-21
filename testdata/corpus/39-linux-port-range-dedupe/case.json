@@ -1,0 +1,17 @@
+{
+  "name": "39-linux-port-range-dedupe",
+  "description": "Ports 3000-3002 and 3001 again: the range and the repeated port are de-duplicated to three endpoints. PID 100 is one resource with ports 3000 and 3001.",
+  "contract": "tcp-listener",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000-3002", "3001"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "lsof_same_pid_two_ports.txt"}
+  },
+  "files": {"/proc/net/tcp": "tcp_two_ports.txt"},
+  "procs": [{"pid": 100, "start": "100100", "name": "node"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"endpoints.#": 3, "endpoints.0.port": 3000, "endpoints.1.port": 3001, "endpoints.2.port": 3002, "endpoints.2.occupied": false, "resources.#": 1, "resources.0.ports": [3000, 3001]},
+    "no_mutation": true
+  }
+}

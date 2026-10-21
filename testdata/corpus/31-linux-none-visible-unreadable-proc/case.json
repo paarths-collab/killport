@@ -1,0 +1,15 @@
+{
+  "name": "31-linux-none-visible-unreadable-proc",
+  "description": "/proc/net/tcp cannot be read and lsof names no owner. Nothing is known about 3000, so the result is none_visible and uncertain, never free.",
+  "contract": "visibility",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"exit": 1, "stdout": "", "stderr": ""}
+  },
+  "expect": {
+    "exit": 4,
+    "json_paths": {"resources.#": 0, "endpoints.0.occupied": false, "endpoints.0.visibility": "none_visible"},
+    "no_mutation": true
+  }
+}

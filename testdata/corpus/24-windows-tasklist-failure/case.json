@@ -1,0 +1,16 @@
+{
+  "name": "24-windows-tasklist-failure",
+  "description": "tasklist fails (access denied). Owners cannot be named, so PID 4120 is refused and the endpoint is provider_unavailable.",
+  "contract": "errors",
+  "platform": "windows",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "netstat -ano": {"stdout_file": "../../windows/netstat_ano.txt"},
+    "tasklist /FO CSV /NH": {"exit": 1, "stdout": "", "stderr": "ERROR: Access denied"}
+  },
+  "expect": {
+    "exit": 1,
+    "json_paths": {"resources.#": 0, "endpoints.0.visibility": "provider_unavailable", "refused.0.port": 3000, "refused.0.pid": 4120},
+    "no_mutation": true
+  }
+}

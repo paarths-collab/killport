@@ -1,0 +1,16 @@
+{
+  "name": "26-linux-lsof-exit2-provider-unavailable",
+  "description": "lsof fails with exit status 2. The owner provider is unavailable, so the endpoint is provider_unavailable (exit 1), not free and not permission_limited.",
+  "contract": "errors",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"exit": 2, "stdout": "", "stderr": "lsof: fatal: cannot open /dev/kmem"}
+  },
+  "files": {"/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt", "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"},
+  "expect": {
+    "exit": 1,
+    "json_paths": {"resources.#": 0, "endpoints.0.visibility": "provider_unavailable", "endpoints.0.occupied": true},
+    "no_mutation": true
+  }
+}

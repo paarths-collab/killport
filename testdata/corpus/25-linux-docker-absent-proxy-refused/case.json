@@ -1,0 +1,17 @@
+{
+  "name": "25-linux-docker-absent-proxy-refused",
+  "description": "docker is not installed and docker-proxy (PID 800) holds 3000. Infrastructure is never signalled directly, so it is refused.",
+  "contract": "docker",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "lsof_docker_proxy.txt"}
+  },
+  "files": {"/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt", "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"},
+  "procs": [{"pid": 800, "start": "100800", "name": "docker-proxy"}],
+  "expect": {
+    "exit": 1,
+    "json_paths": {"resources.#": 0, "refused.0.pid": 800, "refused.0.port": 3000, "refused.0.name": "docker-proxy"},
+    "no_mutation": true
+  }
+}

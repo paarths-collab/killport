@@ -1,0 +1,17 @@
+{
+  "name": "02-linux-ipv4-listener",
+  "description": "Real Linux capture: IPv4 wildcard listener on 3000 is attributed to python3 PID 277 with its start-time identity.",
+  "contract": "tcp-listener",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "../../linux/lsof_listen.txt"}
+  },
+  "files": {"/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt", "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"},
+  "procs": [{"pid": 277, "start": "100277", "name": "python3"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 1, "resources.0.pid": 277, "resources.0.name": "python3", "resources.0.start_time": "100277", "resources.0.signal": "SIGTERM", "resources.0.identity_strength": "start_time", "endpoints.0.occupied": true},
+    "no_mutation": true
+  }
+}
