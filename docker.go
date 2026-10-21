@@ -79,12 +79,16 @@ func parseDockerPS(out string) map[int][]container {
 // "Ports" column, e.g. "0.0.0.0:8080->80/tcp, [::]:8080->80/tcp,
 // 0.0.0.0:8000-8002->8000-8002/tcp, 53/udp". Host ranges are expanded; UDP
 // and unpublished ports are ignored; the result is sorted and de-duplicated.
-func parseDockerPorts(field string) []int {
+func parseDockerPorts(field string) []int { return parseDockerPortsProto(field, "tcp") }
+
+// parseDockerPortsProto is parseDockerPorts for an explicit protocol ("tcp" or
+// "udp"): only mappings ending in "/<protocol>" are considered.
+func parseDockerPortsProto(field, protocol string) []int {
 	seen := make(map[int]bool)
 	for _, m := range strings.Split(field, ",") {
 		m = strings.TrimSpace(m)
 		idx := strings.Index(m, "->")
-		if idx < 0 || !strings.HasSuffix(m, "/tcp") {
+		if idx < 0 || !strings.HasSuffix(m, "/"+protocol) {
 			continue
 		}
 		host := m[:idx]

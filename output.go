@@ -42,6 +42,11 @@ func writeJSON(w io.Writer, v any) {
 // (stdout is always valid JSON), a message on stderr otherwise.
 func (a *app) reportFatal(e *cliError) {
 	if a.opts.json {
+		if a.workflow {
+			// inspect / plan / apply errors also name their exit class.
+			writeJSON(a.stdout, map[string]string{"error": e.Msg, "code": e.Code, "exit_class": exitClassName(e.Exit)})
+			return
+		}
 		writeJSON(a.stdout, map[string]string{"error": e.Msg, "code": e.Code})
 		return
 	}

@@ -42,9 +42,13 @@ type options struct {
 
 type app struct {
 	sys    system
+	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
 	opts   options
+	// workflow is set when an inspect / plan / apply subcommand runs (or
+	// failed to parse): its fatal JSON errors also carry an exit_class.
+	workflow bool
 }
 
 func main() {
@@ -93,7 +97,12 @@ func parseBoolDefaultTrue(v string) bool {
 // run executes killport and returns the process exit code:
 // 0 success, 1 runtime failure, 2 usage error.
 func run(args []string, stdout, stderr io.Writer, sys system) int {
-	a := &app{stdout: stdout, stderr: stderr}
+	return runIO(args, os.Stdin, stdout, stderr, sys)
+}
+
+// runIO is run with an explicit standard input (used by `apply -`).
+func runIO(args []string, stdin io.Reader, stdout, stderr io.Writer, sys system) int {
+	a := &app{stdin: stdin, stdout: stdout, stderr: stderr}
 	exit := 0
 
 	cmd := &cobra.Command{
@@ -101,9 +110,12 @@ func run(args []string, stdout, stderr io.Writer, sys system) int {
 		Version:       version(),
 		Short:         "Free up local ports by killing the processes (or Docker containers) attached to them.",
 		Long:          "Free up local ports by stopping the processes (or Docker containers) that LISTEN on them.\nOnly TCP listeners are considered; UDP sockets and client connections are never touched.",
-		Example:       "killport 3000\nkillport 3000-3005\nkillport 8080 --json\nkillport 3000 --dry-run\nkillport --check\nkillport --check 3000 8080",
+		Example:       "killport 3000\nkillport 3000-3005\nkillport 8080 --json\nkillport 3000 --dry-run\nkillport --check\nkillport --check 3000 8080\nkillport plan 3000 -o plan.json && killport apply plan.json",
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		// Ports are positional arguments; with subcommands present cobra would
+		// otherwise reject "killport 3000" as an unknown command.
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, cmdArgs []string) error {
 			code, err := a.execute(cmd.Context(), cmdArgs)
 			exit = code
@@ -119,12 +131,28 @@ func run(args []string, stdout, stderr io.Writer, sys system) int {
 	cmd.Flags().BoolVarP(&a.opts.check, "check", "c", false, "Check which process is using port(s) without killing")
 
 	a.sys = sys
+	cmd.CompletionOptions.DisableDefaultCmd = true
+	a.addWorkflowCommands(cmd, &exit)
 
 	// With --json stdout must stay JSON even for --help and --version, which
 	// cobra would otherwise print as plain text.
 	cmd.InitDefaultHelpFlag()
 	cmd.InitDefaultVersionFlag()
-	if perr := cmd.ParseFlags(args); perr == nil && a.opts.json {
+	if sub, subArgs, ferr := cmd.Find(args); ferr == nil && sub != cmd {
+		// A workflow subcommand: its own --help, as JSON when asked.
+		a.workflow = true
+		sub.InitDefaultHelpFlag()
+		if perr := sub.ParseFlags(subArgs); perr == nil && a.opts.json {
+			if helpFlag, _ := sub.Flags().GetBool("help"); helpFlag {
+				var usage bytes.Buffer
+				sub.SetOut(&usage)
+				_ = sub.Help()
+				sub.SetOut(stdout)
+				writeJSON(stdout, map[string]string{"usage": usage.String()})
+				return 0
+			}
+		}
+	} else if perr := cmd.ParseFlags(args); perr == nil && a.opts.json {
 		helpFlag, _ := cmd.Flags().GetBool("help")
 		versionFlag, _ := cmd.Flags().GetBool("version")
 		switch {
