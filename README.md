@@ -197,7 +197,7 @@ A single object on stdout, with the exit code from [Exit codes](#exit-codes):
 {"error": "requires at least 1 port (or use --check to inspect)", "code": "usage"}
 ```
 
-`code` is one of `usage` (exit 2), `missing_dependency` (exit 1) or `enumeration_failed` (exit 1).
+`code` is one of `usage` (exit 2), `missing_dependency` (exit 1) or `enumeration_failed` (exit 1). The workflow subcommands also return `write_failed` (exit 1) and add an `exit_class` field.
 
 ## 🚦 Exit codes
 
@@ -206,6 +206,196 @@ A single object on stdout, with the exit code from [Exit codes](#exit-codes):
 | `0` | Success. Kill: every requested port is free at the end (or was already free). Dry run: no failed rows. Check: inspection succeeded, whether ports are free or in use |
 | `1` | Runtime failure: any row has `status: "failed"`, a required tool is missing, or listing listeners failed |
 | `2` | Usage error: unknown flag, invalid port spec, or no ports without `--check` |
+
+The `inspect`, `plan` and `apply` subcommands also use exit codes 3 and 4. See [Plan / apply workflow (opt-in)](#plan--apply-workflow-opt-in).
+
+## Plan / apply workflow (opt-in)
+
+Use this workflow when you want to see exactly which process or container holds a port, bind that answer to the specific process identity, and act on it later. `inspect` and `plan` never change anything. `apply` acts only on what the plan names, and refuses any process whose identity has changed since planning.
+
+The classic `killport <ports>` command is unchanged and remains the default. Nothing in the workflow runs unless you invoke `inspect`, `plan` or `apply`.
+
+### When to use it
+
+1. Preview the exact owner of a port (`inspect`).
+2. Save a plan that binds each owner to its process identity or container ID (`plan -o`).
+3. Apply that plan later (`apply`). Apply re-checks each identity before it signals anything.
+4. Check the endpoint afterwards. Apply reports whether each port is free, still held by the original owner, or now held by a new owner.
+
+### Commands and flags
+
+| Command | What it does | Flags |
+|---|---|---|
+| `killport inspect [port...]` | Read-only observation. With no ports, reports every occupied port. | `--protocol tcp` or `udp`, `--mode auto`, `native` or `container`, `-j/--json`, `-v/--verbose` |
+| `killport plan <port...>` | Read-only. Writes the plan of what apply would do. | `--protocol`, `--mode`, `--force` (plan SIGKILL instead of SIGTERM), `--ttl` (default `5m`, maximum `24h`), `--grace` (default `10s`, maximum `1h`; the Docker stop grace period and how long apply waits for the port to free), `-o/--output <file>`, `-j/--json`, `-v/--verbose` |
+| `killport apply <plan.json>` or `apply -` | Carries out a plan. `-` reads the plan from standard input. | `-j/--json`, `-v/--verbose` |
+
+- `--protocol tcp` (default) matches LISTEN sockets by local port. `--protocol udp` matches bound sockets by local port. Apply takes the protocol from the plan, so it has no `--protocol`, `--mode`, `--force`, `--ttl` or `--grace` flags.
+- `--mode auto` (default) considers containers and native processes. `native` plans only native processes, and `container` plans only containers.
+- `plan` with `-o` writes the file even when the exit class is not `ok`. With `--json` it also prints the plan to stdout.
+- The root-level `-d/--dry-run` flag belongs to the classic command. For the workflow, `plan` is the preview.
+
+```sh
+killport inspect 3000
+killport plan 3000 3001 -o plan.json
+killport apply plan.json
+killport plan 3000 --json | killport apply -
+```
+
+### Flow
+
+```
+request (ports, protocol, mode)
+  -> observation          socket table + owner attribution (lsof, ss, or netstat + tasklist) + docker ps
+  -> owner resolution     native owner -> PID + start time (identity); container -> full 64-hex ID
+  -> plan                 resources to act on, refusals, endpoints; plan_id = sha256 of the plan
+  -> identity revalidation  apply: plan expiry first, then a fresh observation, then each resource
+                            checked against its bound identity before any signal or docker stop
+  -> action               SIGTERM/SIGKILL to native PIDs, or docker stop -t <grace>; up to 4 at once
+  -> outcome observation  apply polls the planned endpoints until each is free or --grace has passed
+                          (observed once if nothing was acted on)
+```
+
+Apply never searches for new targets. Each action comes from the plan document.
+
+### Plan document (`schema_version` 1)
+
+Fields: `schema_version`, `kind` (`killport.plan`), `plan_id`, `tool_version`, `os`, `created_at`, `expires_at`, `observation_id`, `docker_context`, `request` (`protocol`, `scope`, `mode`, `ports`, `force`, `grace_seconds`), `endpoints` (per port: `visibility`, `occupied`, `resources`, `refused`, `provider_errors`), `resources` (`resource_id`, `provider`, `pid`, `container_id`, `name`, `start_time`, `identity_strength`, `ports`, `action`, `signal`, `grace_seconds`), `refused`, `actions_executed`, `exit_class`.
+
+`plan_id` is `sha256:` plus the hash of the compact JSON with `plan_id` empty. Apply recomputes it and rejects a modified plan (exit 2). The hash is a checksum, not a signature. It detects accidental or partial edits but does not prove who wrote the plan.
+
+Example, trimmed from `docs/evidence/plan.json` (the port 3001 endpoint and resource are omitted):
+
+```json
+{
+  "schema_version": 1,
+  "kind": "killport.plan",
+  "plan_id": "sha256:a11c0b13098d02546523458067bdbd4c749834a2b0116f2c2f20620ef72e0b87",
+  "tool_version": "dev",
+  "os": "linux",
+  "created_at": "2026-10-21T14:00:38Z",
+  "expires_at": "2026-10-21T14:05:38Z",
+  "request": {"protocol": "tcp", "scope": "listener", "ports": [3000, 3001], "force": false, "grace_seconds": 10},
+  "endpoints": [
+    {"protocol": "tcp", "port": 3000, "visibility": "complete_for_requested_scope", "occupied": true,
+     "resources": ["proc:362:2164526"], "refused": []}
+  ],
+  "resources": [
+    {"resource_id": "proc:362:2164526", "provider": "native", "pid": 362, "name": "python3",
+     "start_time": "2164526", "identity_strength": "pidfd", "ports": [3000], "action": "signal", "signal": "SIGTERM"}
+  ],
+  "refused": [],
+  "actions_executed": 0,
+  "exit_class": "ok"
+}
+```
+
+The captured files predate the `mode`, `observation_id`, `docker_context` and `provider_errors` fields, which the current code writes. They are documented above, but they do not appear in the captured examples.
+
+### Apply result (`killport.apply_result`)
+
+Fields: `schema_version`, `kind`, `plan_id`, `applied_at`, `observation_id`, `docker_context`, `actions_executed`, `resources` (`resource_id`, `provider`, `pid`, `container_id`, `ports`, `result`, `verified_gone`, `forced`, `note`, `error`), `endpoints` (`protocol`, `port`, `status`, `visibility`, `holders`, `provider_errors`), `exit_class`, and `error` (only for an expired plan).
+
+Example, trimmed from `docs/evidence/apply.json` (the port 3001 resource and endpoint are omitted):
+
+```json
+{
+  "schema_version": 1,
+  "kind": "killport.apply_result",
+  "plan_id": "sha256:a11c0b13098d02546523458067bdbd4c749834a2b0116f2c2f20620ef72e0b87",
+  "applied_at": "2026-10-21T14:00:38Z",
+  "actions_executed": 2,
+  "resources": [
+    {"resource_id": "proc:362:2164526", "provider": "native", "pid": 362, "ports": [3000],
+     "result": "signal_sent", "verified_gone": true, "forced": false}
+  ],
+  "endpoints": [
+    {"protocol": "tcp", "port": 3000, "status": "free", "visibility": "complete_for_requested_scope"}
+  ],
+  "exit_class": "ok"
+}
+```
+
+Drift example, verbatim from `docs/evidence/apply-drift.json`. The plan was made for PID 484. Before apply, that process exited and a new `python3` (PID 496) took port 3002:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "killport.apply_result",
+  "plan_id": "sha256:af85e763f3883e22cb8549ce37e9cd4e253abe810d2895e302ac41def76ebb05",
+  "applied_at": "2026-10-21T14:00:42Z",
+  "actions_executed": 0,
+  "resources": [
+    {"resource_id": "proc:484:2164788", "provider": "native", "pid": 484, "ports": [3002],
+     "result": "not_attempted", "verified_gone": true, "forced": false, "note": "process already exited"}
+  ],
+  "endpoints": [
+    {"protocol": "tcp", "port": 3002, "status": "blocked_by_new_owner",
+     "visibility": "complete_for_requested_scope", "holders": [{"pid": 496, "name": "python3"}]}
+  ],
+  "exit_class": "needs_fresh_plan"
+}
+```
+
+### Enumerations
+
+| Field | Values |
+|---|---|
+| `visibility` | `complete_for_requested_scope`, `permission_limited`, `none_visible`, `provider_unavailable` |
+| Resource `result` | `not_attempted`, `identity_changed`, `signal_sent`, `stopped`, `permission_denied`, `timeout_unknown`, `failed` |
+| Endpoint `status` | `free`, `blocked_by_original` (the planned owner still holds the port), `blocked_by_new_owner` (someone else holds it), `not_verifiable` |
+| `identity_strength` | `pidfd`, `handle`, `start_time` (the value `none` is never written into a plan) |
+| `action` / `signal` | `signal` with `SIGTERM`, `SIGKILL` or `terminate` (Windows); `docker_stop` |
+| `provider` | `native`, `docker` |
+| `mode` | `auto`, `native`, `container` |
+| `scope` | `listener` (tcp), `bound` (udp) |
+| `provider_errors[].provider` | `docker`, `lsof`, `ss`, `netstat`, `tasklist`, `proc` |
+| `provider_errors[].category` | `unavailable`, `timeout`, `permission`, `failed`, `parse` |
+| `exit_class` | `ok`, `failed`, `usage`, `needs_fresh_plan`, `uncertain` |
+
+### Exit classes
+
+The workflow uses exit codes 0 to 4. The classic command uses only 0 to 2.
+
+| Code | Class | What produces it |
+|---|---|---|
+| `0` | `ok` | Plan or inspect: no refusals, complete visibility, and every occupied endpoint has a resource. Apply: no failed or uncertain resource, and every endpoint is `free` with complete visibility. |
+| `1` | `failed` | Plan: any refusal (for example a hidden or denied owner, Docker infrastructure without a container, a protected PID, or a short container ID), or an occupied endpoint with no resource. Inspect: an owner or Docker provider failed. Apply: a resource `failed` or `permission_denied`, or an endpoint `blocked_by_original` after acting (there is no SIGKILL escalation). Also missing tools and a plan file that cannot be written. |
+| `2` | `usage` | Invalid arguments or flag values, an unreadable, invalid or modified plan, a plan from another OS, or an unsupported schema version. Returned before anything is observed. |
+| `3` | `needs_fresh_plan` | Apply: the plan has expired (checked before observing), a resource's identity changed (`identity_changed`), or an endpoint is `blocked_by_new_owner`. |
+| `4` | `uncertain` | Inspect or plan: a `permission_limited` or `none_visible` endpoint, or inspect with no ports while the socket table cannot be read. Apply: a `timeout_unknown` resource, a `not_verifiable` endpoint, or any endpoint whose visibility is not complete. |
+
+When several conditions apply, the worst class wins, in this order: `failed` (1), then `uncertain` (4), then `needs_fresh_plan` (3), then `ok` (0). Usage (2) is returned before anything is observed, so it never competes with the others.
+
+Two details differ by command. In plan and inspect, `provider_unavailable` gives 1. In apply, a non-complete visibility gives 4 unless a failure outranks it, so the same condition can exit 4 in apply. In plan, a permission-limited endpoint always carries a refusal, so it exits 1, and 4 comes from `none_visible` instead.
+
+### Identity binding
+
+Apply signals a process only if the PID still belongs to the process that was planned. How strongly that is enforced depends on the OS:
+
+- **Linux**: identity is the PID plus the start time in `/proc/<pid>/stat` (field 22). When `pidfd_open` works (kernel 5.3 or later, and not blocked by the sandbox), the start-time check and the signal both go through the pidfd, so there is no race (`identity_strength: pidfd`). Otherwise the check is made and then the signal is sent, leaving a small race (`start_time`).
+- **macOS**: identity is the kernel process start time (`sec.usec`). The check is made and then the signal is sent, leaving a small race (`start_time`).
+- **Windows**: identity is the process creation time, read from an open process handle. The check and `TerminateProcess` both use that handle (`handle`). Windows always terminates the process; `--force` does not change this, and the plan records `terminate`.
+- A process whose identity cannot be read is refused. It is never signalled by PID alone.
+- Always refused: PID 0 or unknown, PID 1 and below, killport itself, and Windows PID 4 (System). A container is bound to its full 64-hex ID. A container listed with a short ID is refused.
+
+### Limits
+
+- The Windows and macOS paths are compiled and vetted, but they have not been run on real machines.
+- The Docker branch is verified only through fakes. The Linux evidence run mounted no Docker socket.
+- Apply never escalates to SIGKILL. If SIGTERM does not free the port, the endpoint is `blocked_by_original` and apply exits 1.
+- `--force` plans SIGKILL on Linux and macOS. On Windows the process is always terminated.
+- The plan is a checksum, not a signature (see above).
+- The Linux evidence run was done as root in a container. Owners that are invisible to a non-root user are therefore not exercised by that run.
+- A plan expires after `--ttl` (default 5 minutes). Apply then exits 3 without observing or acting.
+
+### Verified evidence
+
+- `docs/evidence/README.md` describes the Linux end-to-end run: what it covers, what it does not, and how to reproduce it. `docs/evidence/linux-run.txt` is the raw transcript. The JSON files alongside it are the documents quoted above.
+- `scripts/demo-run.sh` reproduces that run in one `docker run` of `golang:1.25`. It needs Docker and writes into `docs/evidence/` (or `EVIDENCE_DIR`).
+- `testdata/corpus/` holds 44 table-driven cases (`01-` to `44-`). Each directory has one `case.json`. `testdata/corpus/README.md` records for each case whether its input is real, synthetic or mixed. Run them with `go test -count=1 -run Corpus -v ./...`.
+- `acceptance_test.go` has five acceptance tests, `TestAcceptance1_` through `TestAcceptance5_`.
+- The suite had 615 test runs at the time of writing (the `=== RUN` count from `go test -v`). Recount with `go test -v ./... 2>&1 | grep -c '=== RUN'`. Static counts in the source: 169 top-level `Test` functions and 96 `t.Run` call sites.
 
 ---
 
