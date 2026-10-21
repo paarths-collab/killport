@@ -1,14 +1,15 @@
 {
   "schema_version": 1,
   "kind": "killport.apply_result",
-  "plan_id": "sha256:a11c0b13098d02546523458067bdbd4c749834a2b0116f2c2f20620ef72e0b87",
-  "applied_at": "2026-10-21T14:00:38Z",
+  "plan_id": "sha256:73abebe29fa6902fd0b26799d2634a61424c047f93a54e39d18dba1881207616",
+  "applied_at": "2026-10-21T15:44:35Z",
+  "observation_id": "obs:0dda389eecec6537",
   "actions_executed": 2,
   "resources": [
     {
-      "resource_id": "proc:362:2164526",
+      "resource_id": "proc:364:2788232",
       "provider": "native",
-      "pid": 362,
+      "pid": 364,
       "ports": [
         3000
       ],
@@ -17,9 +18,9 @@
       "forced": false
     },
     {
-      "resource_id": "proc:363:2164526",
+      "resource_id": "proc:365:2788232",
       "provider": "native",
-      "pid": 363,
+      "pid": 365,
       "ports": [
         3001
       ],
@@ -33,13 +34,15 @@
       "protocol": "tcp",
       "port": 3000,
       "status": "free",
-      "visibility": "complete_for_requested_scope"
+      "visibility": "complete_for_requested_scope",
+      "provider_errors": []
     },
     {
       "protocol": "tcp",
       "port": 3001,
       "status": "free",
-      "visibility": "complete_for_requested_scope"
+      "visibility": "complete_for_requested_scope",
+      "provider_errors": []
     }
   ],
   "exit_class": "ok"

@@ -3,10 +3,12 @@
   "kind": "killport.inspect",
   "tool_version": "dev",
   "os": "linux",
-  "observed_at": "2026-10-21T14:00:38Z",
+  "observed_at": "2026-10-21T15:44:35Z",
+  "observation_id": "obs:e9ae4f109df5799f",
   "request": {
     "protocol": "tcp",
     "scope": "listener",
+    "mode": "auto",
     "ports": [
       3000
     ],
@@ -21,13 +23,14 @@
       "unattributed": false,
       "owners": [
         {
-          "pid": 362,
+          "pid": 364,
           "name": "python3",
-          "start_time": "2164526",
+          "start_time": "2788232",
           "identity_strength": "pidfd"
         }
       ],
-      "containers": []
+      "containers": [],
+      "provider_errors": []
     }
   ],
   "warnings": [],

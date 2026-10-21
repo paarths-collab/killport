@@ -1,14 +1,15 @@
 {
   "schema_version": 1,
   "kind": "killport.apply_result",
-  "plan_id": "sha256:af85e763f3883e22cb8549ce37e9cd4e253abe810d2895e302ac41def76ebb05",
-  "applied_at": "2026-10-21T14:00:42Z",
+  "plan_id": "sha256:2fa6bb526bff671ba5327fc8cc092bc3fa85694948ae7bec2c9bf4d2ce433906",
+  "applied_at": "2026-10-21T15:44:39Z",
+  "observation_id": "obs:fa1b38bb15a9535c",
   "actions_executed": 0,
   "resources": [
     {
-      "resource_id": "proc:484:2164788",
+      "resource_id": "proc:501:2788492",
       "provider": "native",
-      "pid": 484,
+      "pid": 501,
       "ports": [
         3002
       ],
@@ -26,10 +27,11 @@
       "visibility": "complete_for_requested_scope",
       "holders": [
         {
-          "pid": 496,
+          "pid": 515,
           "name": "python3"
         }
-      ]
+      ],
+      "provider_errors": []
     }
   ],
   "exit_class": "needs_fresh_plan"

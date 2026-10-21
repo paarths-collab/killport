@@ -21,30 +21,30 @@ $ id -un
 root
 
 == 2. fixtures
-fixture pids: srv3000=362 srv3001=363 nc-client=367 udp5353=369
+fixture pids: srv3000=364 srv3001=365 nc-client=369 udp5353=371
 
 $ ss -tanp | grep 300[01]   (TCP sockets)
-LISTEN    0      5            0.0.0.0:3000        0.0.0.0:*     users:(("python3",pid=362,fd=3))
-LISTEN    0      5            0.0.0.0:3001        0.0.0.0:*     users:(("python3",pid=363,fd=3))
-ESTAB     0      0          127.0.0.1:47486     127.0.0.1:3000  users:(("nc",pid=367,fd=3))     
-ESTAB     0      0          127.0.0.1:3000      127.0.0.1:47486 users:(("python3",pid=362,fd=4))
+LISTEN    0      5            0.0.0.0:3001        0.0.0.0:*     users:(("python3",pid=365,fd=3))
+LISTEN    0      5            0.0.0.0:3000        0.0.0.0:*     users:(("python3",pid=364,fd=3))
+ESTAB     0      0          127.0.0.1:44318     127.0.0.1:3000  users:(("nc",pid=369,fd=3))     
+ESTAB     0      0          127.0.0.1:3000      127.0.0.1:44318 users:(("python3",pid=364,fd=4))
 
 $ ss -uanp | grep 5353   (UDP socket)
-UNCONN 0      0            0.0.0.0:5353      0.0.0.0:*    users:(("nc",pid=369,fd=3))
+UNCONN 0      0            0.0.0.0:5353      0.0.0.0:*    users:(("nc",pid=371,fd=3))
 
 -- fixture liveness (after start):
-  server :3000 (target)    pid=362     kill-0=ok   -> ALIVE
-  server :3001 (other)     pid=363     kill-0=ok   -> ALIVE
-  nc client -> :3000       pid=367     kill-0=ok   -> ALIVE
-  udp listener :5353       pid=369     kill-0=ok   -> ALIVE
+  server :3000 (target)    pid=364     kill-0=ok   -> ALIVE
+  server :3001 (other)     pid=365     kill-0=ok   -> ALIVE
+  nc client -> :3000       pid=369     kill-0=ok   -> ALIVE
+  udp listener :5353       pid=371     kill-0=ok   -> ALIVE
 
 == 3. read-only: check, dry-run, inspect, plan
 
 $ killport --check
 [i] Listening TCP ports:
 [i] Code and runtime processes (2):
-[i] Port 3000 is being used by python3 (PID 362) — likely safe to stop (name heuristic).
-[i] Port 3001 is being used by python3 (PID 363) — likely safe to stop (name heuristic).
+[i] Port 3000 is being used by python3 (PID 364) — likely safe to stop (name heuristic).
+[i] Port 3001 is being used by python3 (PID 365) — likely safe to stop (name heuristic).
 exit=0
 
 $ killport --check 3000 --json
@@ -52,7 +52,7 @@ $ killport --check 3000 --json
   {
     "port": "3000",
     "process_name": "python3",
-    "pid": "362",
+    "pid": "364",
     "category": "runtime",
     "safe_to_kill": true
   }
@@ -60,7 +60,7 @@ $ killport --check 3000 --json
 exit=0
 
 $ killport 3000 --dry-run
-[i] [dry-run] Would kill PID 362 (python3) on port 3000
+[i] [dry-run] Would kill PID 364 (python3) on port 3000
 exit=0
 
 $ killport 3000 --dry-run --json
@@ -68,7 +68,7 @@ $ killport 3000 --dry-run --json
   {
     "port": "3000",
     "process_name": "python3",
-    "pid": "362",
+    "pid": "364",
     "killed": false,
     "is_docker": false,
     "status": "planned",
@@ -84,10 +84,12 @@ $ killport inspect 3000 --json
   "kind": "killport.inspect",
   "tool_version": "dev",
   "os": "linux",
-  "observed_at": "2026-10-21T14:00:38Z",
+  "observed_at": "2026-10-21T15:44:35Z",
+  "observation_id": "obs:e9ae4f109df5799f",
   "request": {
     "protocol": "tcp",
     "scope": "listener",
+    "mode": "auto",
     "ports": [
       3000
     ],
@@ -102,13 +104,14 @@ $ killport inspect 3000 --json
       "unattributed": false,
       "owners": [
         {
-          "pid": 362,
+          "pid": 364,
           "name": "python3",
-          "start_time": "2164526",
+          "start_time": "2788232",
           "identity_strength": "pidfd"
         }
       ],
-      "containers": []
+      "containers": [],
+      "provider_errors": []
     }
   ],
   "warnings": [],
@@ -120,14 +123,16 @@ $ killport plan 3000 3001 -o /tmp/plan.json --json
 {
   "schema_version": 1,
   "kind": "killport.plan",
-  "plan_id": "sha256:a11c0b13098d02546523458067bdbd4c749834a2b0116f2c2f20620ef72e0b87",
+  "plan_id": "sha256:73abebe29fa6902fd0b26799d2634a61424c047f93a54e39d18dba1881207616",
   "tool_version": "dev",
   "os": "linux",
-  "created_at": "2026-10-21T14:00:38Z",
-  "expires_at": "2026-10-21T14:05:38Z",
+  "created_at": "2026-10-21T15:44:35Z",
+  "expires_at": "2026-10-21T15:49:35Z",
+  "observation_id": "obs:0aca69918decbc55",
   "request": {
     "protocol": "tcp",
     "scope": "listener",
+    "mode": "auto",
     "ports": [
       3000,
       3001
@@ -142,9 +147,10 @@ $ killport plan 3000 3001 -o /tmp/plan.json --json
       "visibility": "complete_for_requested_scope",
       "occupied": true,
       "resources": [
-        "proc:362:2164526"
+        "proc:364:2788232"
       ],
-      "refused": []
+      "refused": [],
+      "provider_errors": []
     },
     {
       "protocol": "tcp",
@@ -152,18 +158,19 @@ $ killport plan 3000 3001 -o /tmp/plan.json --json
       "visibility": "complete_for_requested_scope",
       "occupied": true,
       "resources": [
-        "proc:363:2164526"
+        "proc:365:2788232"
       ],
-      "refused": []
+      "refused": [],
+      "provider_errors": []
     }
   ],
   "resources": [
     {
-      "resource_id": "proc:362:2164526",
+      "resource_id": "proc:364:2788232",
       "provider": "native",
-      "pid": 362,
+      "pid": 364,
       "name": "python3",
-      "start_time": "2164526",
+      "start_time": "2788232",
       "identity_strength": "pidfd",
       "ports": [
         3000
@@ -172,11 +179,11 @@ $ killport plan 3000 3001 -o /tmp/plan.json --json
       "signal": "SIGTERM"
     },
     {
-      "resource_id": "proc:363:2164526",
+      "resource_id": "proc:365:2788232",
       "provider": "native",
-      "pid": 363,
+      "pid": 365,
       "name": "python3",
-      "start_time": "2164526",
+      "start_time": "2788232",
       "identity_strength": "pidfd",
       "ports": [
         3001
@@ -195,14 +202,16 @@ $ cat /tmp/plan.json
 {
   "schema_version": 1,
   "kind": "killport.plan",
-  "plan_id": "sha256:a11c0b13098d02546523458067bdbd4c749834a2b0116f2c2f20620ef72e0b87",
+  "plan_id": "sha256:73abebe29fa6902fd0b26799d2634a61424c047f93a54e39d18dba1881207616",
   "tool_version": "dev",
   "os": "linux",
-  "created_at": "2026-10-21T14:00:38Z",
-  "expires_at": "2026-10-21T14:05:38Z",
+  "created_at": "2026-10-21T15:44:35Z",
+  "expires_at": "2026-10-21T15:49:35Z",
+  "observation_id": "obs:0aca69918decbc55",
   "request": {
     "protocol": "tcp",
     "scope": "listener",
+    "mode": "auto",
     "ports": [
       3000,
       3001
@@ -217,9 +226,10 @@ $ cat /tmp/plan.json
       "visibility": "complete_for_requested_scope",
       "occupied": true,
       "resources": [
-        "proc:362:2164526"
+        "proc:364:2788232"
       ],
-      "refused": []
+      "refused": [],
+      "provider_errors": []
     },
     {
       "protocol": "tcp",
@@ -227,18 +237,19 @@ $ cat /tmp/plan.json
       "visibility": "complete_for_requested_scope",
       "occupied": true,
       "resources": [
-        "proc:363:2164526"
+        "proc:365:2788232"
       ],
-      "refused": []
+      "refused": [],
+      "provider_errors": []
     }
   ],
   "resources": [
     {
-      "resource_id": "proc:362:2164526",
+      "resource_id": "proc:364:2788232",
       "provider": "native",
-      "pid": 362,
+      "pid": 364,
       "name": "python3",
-      "start_time": "2164526",
+      "start_time": "2788232",
       "identity_strength": "pidfd",
       "ports": [
         3000
@@ -247,11 +258,11 @@ $ cat /tmp/plan.json
       "signal": "SIGTERM"
     },
     {
-      "resource_id": "proc:363:2164526",
+      "resource_id": "proc:365:2788232",
       "provider": "native",
-      "pid": 363,
+      "pid": 365,
       "name": "python3",
-      "start_time": "2164526",
+      "start_time": "2788232",
       "identity_strength": "pidfd",
       "ports": [
         3001
@@ -266,10 +277,10 @@ $ cat /tmp/plan.json
 }
 
 -- fixture liveness (after plan and dry-run, must be unchanged):
-  server :3000 (target)    pid=362     kill-0=ok   -> ALIVE
-  server :3001 (other)     pid=363     kill-0=ok   -> ALIVE
-  nc client -> :3000       pid=367     kill-0=ok   -> ALIVE
-  udp listener :5353       pid=369     kill-0=ok   -> ALIVE
+  server :3000 (target)    pid=364     kill-0=ok   -> ALIVE
+  server :3001 (other)     pid=365     kill-0=ok   -> ALIVE
+  nc client -> :3000       pid=369     kill-0=ok   -> ALIVE
+  udp listener :5353       pid=371     kill-0=ok   -> ALIVE
 
 == 4. apply the plan
 
@@ -277,14 +288,15 @@ $ killport apply /tmp/plan.json --json
 {
   "schema_version": 1,
   "kind": "killport.apply_result",
-  "plan_id": "sha256:a11c0b13098d02546523458067bdbd4c749834a2b0116f2c2f20620ef72e0b87",
-  "applied_at": "2026-10-21T14:00:38Z",
+  "plan_id": "sha256:73abebe29fa6902fd0b26799d2634a61424c047f93a54e39d18dba1881207616",
+  "applied_at": "2026-10-21T15:44:35Z",
+  "observation_id": "obs:0dda389eecec6537",
   "actions_executed": 2,
   "resources": [
     {
-      "resource_id": "proc:362:2164526",
+      "resource_id": "proc:364:2788232",
       "provider": "native",
-      "pid": 362,
+      "pid": 364,
       "ports": [
         3000
       ],
@@ -293,9 +305,9 @@ $ killport apply /tmp/plan.json --json
       "forced": false
     },
     {
-      "resource_id": "proc:363:2164526",
+      "resource_id": "proc:365:2788232",
       "provider": "native",
-      "pid": 363,
+      "pid": 365,
       "ports": [
         3001
       ],
@@ -309,13 +321,15 @@ $ killport apply /tmp/plan.json --json
       "protocol": "tcp",
       "port": 3000,
       "status": "free",
-      "visibility": "complete_for_requested_scope"
+      "visibility": "complete_for_requested_scope",
+      "provider_errors": []
     },
     {
       "protocol": "tcp",
       "port": 3001,
       "status": "free",
-      "visibility": "complete_for_requested_scope"
+      "visibility": "complete_for_requested_scope",
+      "provider_errors": []
     }
   ],
   "exit_class": "ok"
@@ -323,10 +337,10 @@ $ killport apply /tmp/plan.json --json
 exit=0
 
 -- fixture liveness (after apply):
-  server :3000 (target)    pid=362     kill-0=fail -> DEAD
-  server :3001 (other)     pid=363     kill-0=fail -> DEAD
-  nc client -> :3000       pid=367     kill-0=ok   -> ALIVE
-  udp listener :5353       pid=369     kill-0=ok   -> ALIVE
+  server :3000 (target)    pid=364     kill-0=fail -> DEAD
+  server :3001 (other)     pid=365     kill-0=fail -> DEAD
+  nc client -> :3000       pid=369     kill-0=ok   -> ALIVE
+  udp listener :5353       pid=371     kill-0=ok   -> ALIVE
 
 $ killport --check 3000 --json
 [
@@ -341,32 +355,34 @@ exit=0
 == 4b. drift: plan a fresh server, replace it, then apply
 
 $ killport plan 3002 -o /tmp/p2.json
-[i] Plan sha256:af85e763f3883e22cb8549ce37e9cd4e253abe810d2895e302ac41def76ebb05
-tcp listener ports 3002 on linux; created 2026-10-21T14:00:40Z, expires 2026-10-21T14:05:40Z
+[i] Plan sha256:2fa6bb526bff671ba5327fc8cc092bc3fa85694948ae7bec2c9bf4d2ce433906
+tcp listener ports 3002 on linux; created 2026-10-21T15:44:37Z, expires 2026-10-21T15:49:37Z
+Mode: auto  Observation: obs:c563fca77aff1e02
 Resources (1):
-  proc:484:2164788  SIGTERM  pid 484 (python3)  ports 3002
+  proc:501:2788492  SIGTERM  pid 501 (python3)  ports 3002
 Refused (0):
 Endpoints (1):
-  tcp 3002: occupied, visibility complete_for_requested_scope, resources [proc:484:2164788]
+  tcp 3002: occupied, visibility complete_for_requested_scope, resources [proc:501:2788492]
 Nothing was changed (actions_executed: 0). Result: ok
 [✔] Plan written to /tmp/p2.json; review it, then run: killport apply /tmp/p2.json
 exit=0
 
 $ ss -tlnp | grep 3002   (after replacing the server)
-LISTEN 0      5            0.0.0.0:3002      0.0.0.0:*    users:(("python3",pid=496,fd=3))
+LISTEN 0      5            0.0.0.0:3002      0.0.0.0:*    users:(("python3",pid=515,fd=3))
 
 $ killport apply /tmp/p2.json --json
 {
   "schema_version": 1,
   "kind": "killport.apply_result",
-  "plan_id": "sha256:af85e763f3883e22cb8549ce37e9cd4e253abe810d2895e302ac41def76ebb05",
-  "applied_at": "2026-10-21T14:00:42Z",
+  "plan_id": "sha256:2fa6bb526bff671ba5327fc8cc092bc3fa85694948ae7bec2c9bf4d2ce433906",
+  "applied_at": "2026-10-21T15:44:39Z",
+  "observation_id": "obs:fa1b38bb15a9535c",
   "actions_executed": 0,
   "resources": [
     {
-      "resource_id": "proc:484:2164788",
+      "resource_id": "proc:501:2788492",
       "provider": "native",
-      "pid": 484,
+      "pid": 501,
       "ports": [
         3002
       ],
@@ -384,10 +400,11 @@ $ killport apply /tmp/p2.json --json
       "visibility": "complete_for_requested_scope",
       "holders": [
         {
-          "pid": 496,
+          "pid": 515,
           "name": "python3"
         }
-      ]
+      ],
+      "provider_errors": []
     }
   ],
   "exit_class": "needs_fresh_plan"
@@ -395,12 +412,12 @@ $ killport apply /tmp/p2.json --json
 exit=3
 
 -- fixture liveness (after drift apply):
-  server :3000 (target)    pid=362     kill-0=fail -> DEAD
-  server :3001 (other)     pid=363     kill-0=fail -> DEAD
-  nc client -> :3000       pid=367     kill-0=ok   -> ALIVE
-  udp listener :5353       pid=369     kill-0=ok   -> ALIVE
-  server :3002 (first)     pid=484     kill-0=fail -> DEAD
-  server :3002 (second)    pid=496     kill-0=ok   -> ALIVE
+  server :3000 (target)    pid=364     kill-0=fail -> DEAD
+  server :3001 (other)     pid=365     kill-0=fail -> DEAD
+  nc client -> :3000       pid=369     kill-0=ok   -> ALIVE
+  udp listener :5353       pid=371     kill-0=ok   -> ALIVE
+  server :3002 (first)     pid=501     kill-0=fail -> DEAD
+  server :3002 (second)    pid=515     kill-0=ok   -> ALIVE
 
 == 4c. legacy kill and error handling
 
@@ -409,7 +426,7 @@ $ killport 3002 --json
   {
     "port": "3002",
     "process_name": "python3",
-    "pid": "496",
+    "pid": "515",
     "killed": true,
     "is_docker": false,
     "status": "killed",
@@ -420,12 +437,12 @@ $ killport 3002 --json
 exit=0
 
 -- fixture liveness (after legacy kill):
-  server :3000 (target)    pid=362     kill-0=fail -> DEAD
-  server :3001 (other)     pid=363     kill-0=fail -> DEAD
-  nc client -> :3000       pid=367     kill-0=ok   -> ALIVE
-  udp listener :5353       pid=369     kill-0=ok   -> ALIVE
-  server :3002 (first)     pid=484     kill-0=fail -> DEAD
-  server :3002 (second)    pid=496     kill-0=fail -> DEAD
+  server :3000 (target)    pid=364     kill-0=fail -> DEAD
+  server :3001 (other)     pid=365     kill-0=fail -> DEAD
+  nc client -> :3000       pid=369     kill-0=ok   -> ALIVE
+  udp listener :5353       pid=371     kill-0=ok   -> ALIVE
+  server :3002 (first)     pid=501     kill-0=fail -> DEAD
+  server :3002 (second)    pid=515     kill-0=fail -> DEAD
 
 $ killport 99999999
 [stderr]
@@ -448,11 +465,11 @@ exit=0
 == 5. cleanup: kill the fixture pids this script started
 
 -- fixture liveness (final):
-  server :3000 (target)    pid=362     kill-0=fail -> DEAD
-  server :3001 (other)     pid=363     kill-0=fail -> DEAD
-  nc client -> :3000       pid=367     kill-0=fail -> DEAD
-  udp listener :5353       pid=369     kill-0=fail -> DEAD
-  server :3002 (first)     pid=484     kill-0=fail -> DEAD
-  server :3002 (second)    pid=496     kill-0=fail -> DEAD
+  server :3000 (target)    pid=364     kill-0=fail -> DEAD
+  server :3001 (other)     pid=365     kill-0=fail -> DEAD
+  nc client -> :3000       pid=369     kill-0=fail -> DEAD
+  udp listener :5353       pid=371     kill-0=fail -> DEAD
+  server :3002 (first)     pid=501     kill-0=fail -> DEAD
+  server :3002 (second)    pid=515     kill-0=fail -> DEAD
 
 == done
