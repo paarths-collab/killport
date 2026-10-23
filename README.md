@@ -25,11 +25,14 @@ Use **killport** to inspect local port owners, preview actions, and check the ou
 
 ### macOS (Homebrew)
 ```bash
-brew tap paarths-collab/homebrew-tap
-brew install paarths-collab/tap/killport
+brew tap paarths-collab/tap
+brew trust --tap paarths-collab/tap
+brew install killport-cli
 ```
 
-The qualified formula name selects this project; Homebrew core also contains a different `killport`.
+`killport-cli` is the Homebrew alias for this project; the executable is still `killport`. The one-time trust command trusts this tap's current and future formulae and commands. To trust only killport, use `brew trust --formula paarths-collab/tap/killport` instead.
+
+The single-command install `brew install paarths-collab/tap/killport` also remains supported. Plain `brew install killport` selects the different project in Homebrew core.
 
 ### Windows (Scoop)
 ```powershell
@@ -96,7 +99,7 @@ Upgrade an existing package installation:
 
 ```sh
 brew update
-brew upgrade paarths-collab/tap/killport
+brew upgrade killport-cli
 ```
 
 ```powershell

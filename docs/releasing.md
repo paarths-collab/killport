@@ -44,6 +44,11 @@ Verify that the authenticated publishing account is `paarths-collab` immediately
 before each remote write. Do not use server-side file edits or generated package
 commits that replace this identity.
 
+Preserve the tap's `Aliases/killport-cli` relative symlink to
+`../Formula/killport.rb`. This static alias is deliberately not a second formula:
+it shares the canonical package's release checksums and existing installation
+history, and does not need a new version when the formula is updated.
+
 Package repository writes are deliberately separate from GoReleaser: a
 repository-scoped Actions token cannot update the other repositories, and
 automatic commits would not preserve the required local commit identity. The
@@ -57,9 +62,16 @@ its `--version --json`, TCP/UDP inspect and plan/apply, and classic dry-run and
 termination against listeners created by the test. Checking a downloaded binary
 alone does not establish that installation, linking or upgrading works.
 
-Use `brew install paarths-collab/tap/killport` for a fresh Homebrew install:
-Homebrew core also contains a different project named `killport`. For Scoop,
-add the public bucket and use `scoop install paarths-collab/killport`.
-Existing users run `brew update` followed by
-`brew upgrade paarths-collab/tap/killport`, or `scoop update` followed by
-`scoop update killport`.
+For Homebrew, test the short name `killport-cli` after adding and explicitly
+trusting the tap or canonical formula. Current Homebrew requires canonical
+formula trust before an alias can load; trusting just an alias name is not
+sufficient. The README documents tap-level trust and a narrower per-formula
+alternative. Also retain the direct install
+`brew install paarths-collab/tap/killport` for users who prefer a single command.
+Homebrew core's unqualified `killport` still names a different project.
+
+For Scoop, add the public bucket and use
+`scoop install paarths-collab/killport`. Existing users run `brew update` followed
+by `brew upgrade killport-cli`, or `scoop update` followed by
+`scoop update killport`. Check an upgrade from a canonical pre-alias Homebrew
+installation as well as a fresh install through the short alias.
