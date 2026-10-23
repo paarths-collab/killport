@@ -22,6 +22,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./...
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

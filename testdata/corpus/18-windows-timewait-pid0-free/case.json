@@ -1,0 +1,15 @@
+{
+  "name": "18-windows-timewait-pid0-free",
+  "description": "Windows netstat with a TIME_WAIT row (PID 0) and an ESTABLISHED row (PID 4120), both with local port 3000. Neither is a listener, so the port is free.",
+  "contract": "tcp-listener",
+  "platform": "windows",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "netstat -ano": {"stdout_file": "netstat_timewait.txt"}
+  },
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 0, "endpoints.0.occupied": false, "endpoints.0.visibility": "complete_for_requested_scope"},
+    "no_mutation": true
+  }
+}

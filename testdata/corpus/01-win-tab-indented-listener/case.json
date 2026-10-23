@@ -1,0 +1,16 @@
+{
+  "name": "01-win-tab-indented-listener",
+  "description": "Windows netstat rows indented with tabs and spaces are still parsed; the listener on 3000 is found.",
+  "contract": "tcp-listener",
+  "platform": "windows",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "netstat -ano": {"stdout_file": "netstat_tabs.txt"},
+    "tasklist /FO CSV /NH": {"stdout_file": "../../windows/tasklist_csv.txt"}
+  },
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 1, "resources.0.pid": 4120, "resources.0.name": "node.exe", "endpoints.0.visibility": "complete_for_requested_scope"},
+    "no_mutation": true
+  }
+}

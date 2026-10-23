@@ -1,0 +1,18 @@
+{
+  "name": "28-linux-docker-ps-timeout-infra-refused",
+  "description": "docker ps times out while docker-proxy (PID 800) holds 3000. The owning container is unknown, so the proxy is refused and the result fails.",
+  "contract": "docker",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "lsof_docker_proxy.txt"},
+    "docker ps --no-trunc --format {{.ID}}|{{.Names}}|{{.Ports}}": {"exit": -1, "stdout": "", "stderr": ""}
+  },
+  "files": {"/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt", "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"},
+  "procs": [{"pid": 800, "start": "100800", "name": "docker-proxy"}],
+  "expect": {
+    "exit": 1,
+    "json_paths": {"resources.#": 0, "refused.0.pid": 800, "endpoints.0.visibility": "provider_unavailable"},
+    "no_mutation": true
+  }
+}

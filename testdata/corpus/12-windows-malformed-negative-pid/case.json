@@ -1,0 +1,27 @@
+{
+  "name": "12-windows-malformed-negative-pid",
+  "description": "LISTENING rows on 3000 with a non-numeric PID (abc) and a negative PID (-5) yield no usable owner. The occupant is hidden, so it is refused: permission_limited, refused, and the plan exits failed. Nothing is planned and the port is never reported free.",
+  "contract": "tcp-listener",
+  "platform": "windows",
+  "args": [
+    "plan",
+    "--json",
+    "3000"
+  ],
+  "commands": {
+    "netstat -ano": {
+      "stdout_file": "netstat_malformed.txt"
+    }
+  },
+  "expect": {
+    "exit": 1,
+    "json_paths": {
+      "resources.#": 0,
+      "endpoints.0.occupied": true,
+      "endpoints.0.visibility": "permission_limited",
+      "refused.#": 1,
+      "refused.0.port": 3000
+    },
+    "no_mutation": true
+  }
+}

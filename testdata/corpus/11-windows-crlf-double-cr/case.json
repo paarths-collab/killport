@@ -1,0 +1,16 @@
+{
+  "name": "11-windows-crlf-double-cr",
+  "description": "Both netstat and tasklist output carry \\r\\r\\n line endings (a CR appended to every CRLF line). Parsing still finds node.exe on 3000.",
+  "contract": "tcp-listener",
+  "platform": "windows",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "netstat -ano": {"stdout_file": "netstat_crcrlf.txt"},
+    "tasklist /FO CSV /NH": {"stdout_file": "tasklist_crcrlf.txt"}
+  },
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 1, "resources.0.pid": 4120, "resources.0.name": "node.exe"},
+    "no_mutation": true
+  }
+}

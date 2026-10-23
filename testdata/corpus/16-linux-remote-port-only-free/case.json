@@ -1,0 +1,18 @@
+{
+  "name": "16-linux-remote-port-only-free",
+  "description": "The only socket with 3000 in it is nc's client connection, whose REMOTE port is 3000. The port is free and the client is never planned.",
+  "contract": "tcp-listener",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "lsof_client_only.txt"}
+  },
+  "files": {"/proc/net/tcp": "tcp_client_only.txt"},
+  "procs": [{"pid": 284, "start": "100284", "name": "nc"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 0, "endpoints.0.occupied": false, "endpoints.0.visibility": "complete_for_requested_scope"},
+    "signals": [],
+    "no_mutation": true
+  }
+}

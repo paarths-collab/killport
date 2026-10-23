@@ -1,0 +1,16 @@
+{
+  "name": "10-windows-unexpected-bound-state",
+  "description": "A BOUND state (not a listener) on 3000 with wildcard foreign 0 must not occupy the port. The 3001 listener on the same PID is not used for 3000.",
+  "contract": "tcp-listener",
+  "platform": "windows",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "netstat -ano": {"stdout_file": "netstat_bound.txt"},
+    "tasklist /FO CSV /NH": {"stdout_file": "../../windows/tasklist_csv.txt"}
+  },
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 0, "endpoints.0.occupied": false, "endpoints.0.visibility": "complete_for_requested_scope"},
+    "no_mutation": true
+  }
+}

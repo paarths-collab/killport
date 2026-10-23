@@ -1,0 +1,28 @@
+{
+  "name": "13-windows-pid0-listener-hides-owner",
+  "description": "A LISTENING row with PID 0 next to the real owner 4120 on 3000. The real owner is planned, but the hidden row is refused, so the plan exits failed (a hidden occupant is also a refusal).",
+  "contract": "tcp-listener",
+  "platform": "windows",
+  "args": [
+    "plan",
+    "--json",
+    "3000"
+  ],
+  "commands": {
+    "netstat -ano": {
+      "stdout_file": "netstat_pid0.txt"
+    },
+    "tasklist /FO CSV /NH": {
+      "stdout_file": "../../windows/tasklist_csv.txt"
+    }
+  },
+  "expect": {
+    "exit": 1,
+    "json_paths": {
+      "resources.#": 1,
+      "resources.0.pid": 4120,
+      "endpoints.0.visibility": "permission_limited"
+    },
+    "no_mutation": true
+  }
+}

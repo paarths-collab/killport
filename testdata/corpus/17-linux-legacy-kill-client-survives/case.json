@@ -1,0 +1,19 @@
+{
+  "name": "17-linux-legacy-kill-client-survives",
+  "description": "Legacy kill on the real lsof capture that also holds nc's client connection (REMOTE port 3000). Only the listener PID 277 is signalled; the verification pass sees the port free.",
+  "contract": "tcp-listener",
+  "platform": "linux",
+  "args": ["--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": [
+      {"stdout_file": "../../linux/lsof_all_tcp.txt"},
+      {"exit": 1, "stdout": "", "stderr": ""}
+    ]
+  },
+  "procs": [{"pid": 277, "start": "100277", "name": "python3"}, {"pid": 284, "start": "100284", "name": "nc"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"#": 1, "0.port": "3000", "0.pid": "277", "0.status": "killed", "0.killed": true},
+    "signals": [277]
+  }
+}

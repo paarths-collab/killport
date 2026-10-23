@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "kind": "killport.inspect",
+  "tool_version": "dev",
+  "os": "linux",
+  "observed_at": "2026-10-21T15:44:35Z",
+  "observation_id": "obs:e9ae4f109df5799f",
+  "request": {
+    "protocol": "tcp",
+    "scope": "listener",
+    "mode": "auto",
+    "ports": [
+      3000
+    ],
+    "all": false
+  },
+  "endpoints": [
+    {
+      "protocol": "tcp",
+      "port": 3000,
+      "visibility": "complete_for_requested_scope",
+      "occupied": true,
+      "unattributed": false,
+      "owners": [
+        {
+          "pid": 364,
+          "name": "python3",
+          "start_time": "2788232",
+          "identity_strength": "pidfd"
+        }
+      ],
+      "containers": [],
+      "provider_errors": []
+    }
+  ],
+  "warnings": [],
+  "exit_class": "ok"
+}

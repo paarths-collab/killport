@@ -1,0 +1,17 @@
+{
+  "name": "41-darwin-dry-run-zero-mutation",
+  "description": "Legacy dry run on macOS with the short bundle -dj (dry run and JSON). Node PID 501 on 3000 is planned; nothing is signalled.",
+  "contract": "identity",
+  "platform": "darwin",
+  "args": ["-dj", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "../../darwin/lsof_listen.txt"}
+  },
+  "procs": [{"pid": 501, "start": "100501", "name": "node"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"#": 1, "0.port": "3000", "0.pid": "501", "0.status": "planned", "0.dry_run": true},
+    "signals": [],
+    "no_mutation": true
+  }
+}

@@ -41,6 +41,10 @@ Linux/macOS (script):
 - `curl -sSfL https://raw.githubusercontent.com/paarths-collab/killport/main/install.sh | sh`
 - `killport --version`
 
+## Version Check
+
+`--check` needs killport newer than v1.1.0. If `killport --check` is rejected as an unknown flag, the installed binary is too old: upgrade it (`brew upgrade killport`, `scoop update killport`, or re-run the install script), then retry. Do not fall back to raw OS commands because of this.
+
 ## Fallback Rule
 
 If `killport` is missing, install it globally first. Only use OS-native commands as a temporary fallback if installation fails.

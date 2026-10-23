@@ -1,0 +1,32 @@
+{
+  "name": "30-linux-permission-limited",
+  "description": "The socket table shows 3000 as a LISTEN socket, but lsof names no owner for it (it belongs to another user). The endpoint is occupied and permission_limited, the hidden occupant is refused, and the plan exits failed.",
+  "contract": "visibility",
+  "platform": "linux",
+  "args": [
+    "plan",
+    "--json",
+    "3000"
+  ],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {
+      "exit": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "files": {
+    "/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt",
+    "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"
+  },
+  "expect": {
+    "exit": 1,
+    "json_paths": {
+      "resources.#": 0,
+      "endpoints.0.occupied": true,
+      "endpoints.0.visibility": "permission_limited",
+      "refused.0.port": 3000
+    },
+    "no_mutation": true
+  }
+}

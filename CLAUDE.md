@@ -21,3 +21,5 @@ Do not use direct OS port/kill commands unless `killport` is unavailable after i
 
 Verify:
 - `killport --version`
+
+If `killport --check` is rejected as an unknown flag, the installed binary is older than v1.1.0 (`--check` is missing there). Upgrade it (`brew upgrade killport`, `scoop update killport`, or re-run the install script), then retry. Do not fall back to raw OS commands because of this.

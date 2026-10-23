@@ -1,0 +1,17 @@
+{
+  "name": "37-linux-pid1-and-self-refused",
+  "description": "PID 1 (systemd, port 80) and killport's own PID 4242 (port 3000) are protected and refused. Nothing is planned.",
+  "contract": "identity",
+  "platform": "linux",
+  "args": ["plan", "--json", "80", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "lsof_pid1_self.txt"}
+  },
+  "files": {"/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt", "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"},
+  "procs": [{"pid": 1, "start": "100001", "name": "systemd"}, {"pid": 4242, "start": "104242", "name": "killport"}],
+  "expect": {
+    "exit": 1,
+    "json_paths": {"resources.#": 0, "refused.#": 2, "refused.0.pid": 1, "refused.0.port": 80, "refused.1.pid": 4242, "refused.1.port": 3000},
+    "no_mutation": true
+  }
+}

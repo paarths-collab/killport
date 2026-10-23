@@ -1,0 +1,16 @@
+{
+  "name": "09-windows-localized-listening-state",
+  "description": "A localized state name (ABHÖREN, German for LISTENING) with a wildcard foreign address and port 0 is still a listener on 8080 (python.exe, PID 6500).",
+  "contract": "tcp-listener",
+  "platform": "windows",
+  "args": ["plan", "--json", "8080"],
+  "commands": {
+    "netstat -ano": {"stdout_file": "../../windows/netstat_ano.txt"},
+    "tasklist /FO CSV /NH": {"stdout_file": "../../windows/tasklist_csv.txt"}
+  },
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 1, "resources.0.pid": 6500, "resources.0.name": "python.exe", "endpoints.0.occupied": true},
+    "no_mutation": true
+  }
+}

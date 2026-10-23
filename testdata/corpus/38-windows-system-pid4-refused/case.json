@@ -1,0 +1,16 @@
+{
+  "name": "38-windows-system-pid4-refused",
+  "description": "Port 445 is held by the Windows System process (PID 4). It is never planned for termination.",
+  "contract": "identity",
+  "platform": "windows",
+  "args": ["plan", "--json", "445"],
+  "commands": {
+    "netstat -ano": {"stdout_file": "../../windows/netstat_ano.txt"},
+    "tasklist /FO CSV /NH": {"stdout_file": "../../windows/tasklist_csv.txt"}
+  },
+  "expect": {
+    "exit": 1,
+    "json_paths": {"resources.#": 0, "refused.0.pid": 4, "refused.0.port": 445, "refused.0.name": "System"},
+    "no_mutation": true
+  }
+}

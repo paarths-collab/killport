@@ -1,0 +1,21 @@
+{
+  "name": "35-linux-pid-reuse-apply-refused",
+  "description": "Plan binds python3 PID 277 to start time 100277. Before apply the PID is reused by a different process (start 999277). apply must refuse the signal with identity_changed and send nothing.",
+  "contract": "identity",
+  "platform": "linux",
+  "args": ["apply", "--json", "@plan"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "../../linux/lsof_listen.txt"}
+  },
+  "files": {"/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt", "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"},
+  "procs": [{"pid": 277, "start": "100277", "name": "python3"}],
+  "apply_after_plan": {
+    "plan_args": ["plan", "--json", "3000"],
+    "replace_procs": [{"pid": 277, "start": "999277", "name": "python3"}]
+  },
+  "expect": {
+    "json_paths": {"resources.0.result": "identity_changed", "resources.0.resource_id": "proc:277:100277", "actions_executed": 0},
+    "signals": [],
+    "no_mutation": true
+  }
+}

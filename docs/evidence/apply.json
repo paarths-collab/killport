@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "kind": "killport.apply_result",
+  "plan_id": "sha256:73abebe29fa6902fd0b26799d2634a61424c047f93a54e39d18dba1881207616",
+  "applied_at": "2026-10-21T15:44:35Z",
+  "observation_id": "obs:0dda389eecec6537",
+  "actions_executed": 2,
+  "resources": [
+    {
+      "resource_id": "proc:364:2788232",
+      "provider": "native",
+      "pid": 364,
+      "ports": [
+        3000
+      ],
+      "result": "signal_sent",
+      "verified_gone": true,
+      "forced": false
+    },
+    {
+      "resource_id": "proc:365:2788232",
+      "provider": "native",
+      "pid": 365,
+      "ports": [
+        3001
+      ],
+      "result": "signal_sent",
+      "verified_gone": true,
+      "forced": false
+    }
+  ],
+  "endpoints": [
+    {
+      "protocol": "tcp",
+      "port": 3000,
+      "status": "free",
+      "visibility": "complete_for_requested_scope",
+      "provider_errors": []
+    },
+    {
+      "protocol": "tcp",
+      "port": 3001,
+      "status": "free",
+      "visibility": "complete_for_requested_scope",
+      "provider_errors": []
+    }
+  ],
+  "exit_class": "ok"
+}

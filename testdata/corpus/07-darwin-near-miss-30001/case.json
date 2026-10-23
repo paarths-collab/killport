@@ -1,0 +1,17 @@
+{
+  "name": "07-darwin-near-miss-30001",
+  "description": "macOS: 3000 (node PID 501, IPv4 and IPv6 wildcard) is selected; the 13000 and 30001 listeners are not.",
+  "contract": "tcp-listener",
+  "platform": "darwin",
+  "args": ["plan", "--json", "3000"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"stdout_file": "../../darwin/lsof_listen.txt"},
+    "netstat -an -p tcp": {"stdout_file": "../../sockets/darwin_netstat_tcp.txt"}
+  },
+  "procs": [{"pid": 501, "start": "100501", "name": "node"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 1, "resources.0.pid": 501, "resources.0.name": "node", "resources.0.ports": [3000]},
+    "no_mutation": true
+  }
+}

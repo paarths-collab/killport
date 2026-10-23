@@ -1,0 +1,18 @@
+{
+  "name": "22-linux-lsof-absent-ss-fallback",
+  "description": "Real Linux capture with lsof not installed and ss present: owners come from ss -ltnp, and PID 277 is still planned.",
+  "contract": "errors",
+  "platform": "linux",
+  "args": ["plan", "--json", "3000"],
+  "tools": ["ss"],
+  "commands": {
+    "ss -ltnp": {"stdout_file": "../../linux/ss_ltnp.txt"}
+  },
+  "files": {"/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt", "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"},
+  "procs": [{"pid": 277, "start": "100277", "name": "python3"}],
+  "expect": {
+    "exit": 0,
+    "json_paths": {"resources.#": 1, "resources.0.pid": 277, "resources.0.name": "python3"},
+    "no_mutation": true
+  }
+}

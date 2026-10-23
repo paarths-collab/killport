@@ -1,0 +1,31 @@
+{
+  "name": "27-linux-lsof-exit1-stderr-not-trusted",
+  "description": "lsof exits 1 with empty stdout and a stderr message. That is not a trusted 'nothing matched'. The table shows 3000 occupied with no visible owner, so the endpoint is permission_limited and the plan exits failed. It is never reported free.",
+  "contract": "errors",
+  "platform": "linux",
+  "args": [
+    "plan",
+    "--json",
+    "3000"
+  ],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {
+      "exit": 1,
+      "stdout": "",
+      "stderr": "lsof: WARNING: can't stat() fuse.gvfsd-fuse file system"
+    }
+  },
+  "files": {
+    "/proc/net/tcp": "../../sockets/linux_proc_net_tcp.txt",
+    "/proc/net/tcp6": "../../sockets/linux_proc_net_tcp6.txt"
+  },
+  "expect": {
+    "exit": 1,
+    "json_paths": {
+      "resources.#": 0,
+      "endpoints.0.visibility": "permission_limited",
+      "endpoints.0.occupied": true
+    },
+    "no_mutation": true
+  }
+}

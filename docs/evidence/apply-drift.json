@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "kind": "killport.apply_result",
+  "plan_id": "sha256:2fa6bb526bff671ba5327fc8cc092bc3fa85694948ae7bec2c9bf4d2ce433906",
+  "applied_at": "2026-10-21T15:44:39Z",
+  "observation_id": "obs:fa1b38bb15a9535c",
+  "actions_executed": 0,
+  "resources": [
+    {
+      "resource_id": "proc:501:2788492",
+      "provider": "native",
+      "pid": 501,
+      "ports": [
+        3002
+      ],
+      "result": "not_attempted",
+      "verified_gone": true,
+      "forced": false,
+      "note": "process already exited"
+    }
+  ],
+  "endpoints": [
+    {
+      "protocol": "tcp",
+      "port": 3002,
+      "status": "blocked_by_new_owner",
+      "visibility": "complete_for_requested_scope",
+      "holders": [
+        {
+          "pid": 515,
+          "name": "python3"
+        }
+      ],
+      "provider_errors": []
+    }
+  ],
+  "exit_class": "needs_fresh_plan"
+}

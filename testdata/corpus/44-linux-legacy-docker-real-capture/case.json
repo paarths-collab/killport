@@ -1,0 +1,17 @@
+{
+  "name": "44-linux-legacy-docker-real-capture",
+  "description": "Legacy dry run against the REAL docker ps capture (short IDs, as the legacy command prints them). Both published ports of the one container are planned as a container stop and nothing is stopped.",
+  "contract": "docker",
+  "platform": "linux",
+  "args": ["--dry-run", "--json", "47801", "47810"],
+  "commands": {
+    "lsof -nP +c 0 -iTCP -sTCP:LISTEN -FpcnT": {"exit": 1, "stdout": "", "stderr": ""},
+    "docker ps --format {{.ID}}|{{.Names}}|{{.Ports}}": {"stdout_file": "../../docker/docker_ps.txt"}
+  },
+  "expect": {
+    "exit": 0,
+    "json_paths": {"#": 2, "0.is_docker": true, "0.container_id": "2eebb490bf98", "0.status": "planned", "0.dry_run": true, "1.container_id": "2eebb490bf98", "1.status": "planned"},
+    "docker_stops": [],
+    "no_mutation": true
+  }
+}
