@@ -104,7 +104,7 @@ type applier struct {
 	ctx context.Context
 	sys system
 	doc *planDoc
-	pre *snapshot // observation taken just before acting
+	pre *snapshot // private observation taken just before this resource's action
 	// results are the per-resource outcomes, set once the actions finished.
 	results []applyResource
 }
@@ -163,13 +163,6 @@ func applyPlan(ctx context.Context, sys system, doc *planDoc) (*applyDoc, int, [
 	ctx, cancel := context.WithTimeout(ctx, applyDeadline(doc))
 	defer cancel()
 	ap := &applier{ctx: ctx, sys: sys, doc: doc}
-	if ctx.Err() == nil {
-		ap.pre = collect(ctx, sys, doc.Request.Protocol)
-	} else {
-		// Interrupted before anything started: nothing will be acted on.
-		ap.pre = &snapshot{protocol: doc.Request.Protocol, tableHas: map[int]bool{}, dockerIDs: map[string]bool{}, idents: map[int]ownerObs{}}
-	}
-
 	results := make([]applyResource, len(doc.Resources))
 	attempted := make([]bool, len(doc.Resources))
 	skipped := false
@@ -264,10 +257,18 @@ func (ap *applier) act(r planResource) (applyResource, bool) {
 	if ap.ctx.Err() != nil {
 		return newApplyResource(r, resNotAttempted, applyInterruptedPrefix+" before this resource was acted on"), false
 	}
-	if r.Provider == providerDocker {
-		return ap.stopContainer(r)
+	// A resource can wait behind several slow action waves. Never reuse an
+	// observation made before that wait, and never share mutable observations
+	// between concurrent actions.
+	fresh := *ap
+	fresh.pre = collect(ap.ctx, ap.sys, ap.doc.Request.Protocol)
+	if ap.ctx.Err() != nil {
+		return newApplyResource(r, resNotAttempted, applyInterruptedPrefix+" before this resource was acted on"), false
 	}
-	return ap.signalProcess(r)
+	if r.Provider == providerDocker {
+		return fresh.stopContainer(r)
+	}
+	return fresh.signalProcess(r)
 }
 
 func (ap *applier) signalProcess(r planResource) (applyResource, bool) {
@@ -301,14 +302,18 @@ func (ap *applier) signalProcess(r planResource) (applyResource, bool) {
 // planned incarnation of a process is alive but no longer holds any planned
 // port (it closed its listener, another process took the port): signalling it
 // would then hit a process that no longer has anything to do with the plan.
-// It is false whenever that cannot be proven: any planned port without
-// complete visibility, any port where the PID is still seen as an owner (an
+// It is false whenever that cannot be proven: incomplete native occupancy
+// or attribution, any port where the PID is still seen as an owner (an
 // owner with another start time is for SignalIfSame to report), or a PID that
 // is gone or reused (SignalIfSame reports that too).
 func (ap *applier) noLongerHolds(r planResource) bool {
 	for _, port := range r.Ports {
 		e := ap.pre.endpoint(port)
-		if e.Visibility != visComplete {
+		// Docker availability does not affect whether a native PID has
+		// closed its listener. Use the native sources directly, so an
+		// unrelated Docker failure cannot turn a proven stale action into
+		// a signal.
+		if !ap.pre.tableOK || ap.pre.ownerErr != nil || e.Unattributed {
 			return false
 		}
 		for _, o := range e.Owners {

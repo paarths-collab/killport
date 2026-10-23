@@ -11,6 +11,7 @@ import (
 const (
 	processTerminate            = 0x0001
 	processQueryLimitedInfo     = 0x1000
+	processSynchronize          = 0x00100000
 	errorInvalidParameterWindow = syscall.Errno(87)
 )
 
@@ -18,7 +19,8 @@ const (
 // and to terminate it; the same handle is used for both so the target cannot
 // change in between.
 func openForIdentity(pid int) (syscall.Handle, error) {
-	h, err := syscall.OpenProcess(processTerminate|processQueryLimitedInfo, false, uint32(pid))
+	// WaitForSingleObject (used by handleStartTime) requires SYNCHRONIZE.
+	h, err := syscall.OpenProcess(processTerminate|processQueryLimitedInfo|processSynchronize, false, uint32(pid))
 	if err != nil {
 		switch {
 		case errors.Is(err, errorInvalidParameterWindow):

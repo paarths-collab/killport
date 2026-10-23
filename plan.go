@@ -448,7 +448,7 @@ func validatePlan(doc *planDoc) error {
 	if merr != nil {
 		return bad("unsupported mode %q", req.Mode)
 	}
-	if req.GraceSeconds < 0 || time.Duration(req.GraceSeconds)*time.Second > maxGrace {
+	if req.GraceSeconds < 0 || req.GraceSeconds > int(maxGrace/time.Second) {
 		return bad("grace_seconds %d is out of range", req.GraceSeconds)
 	}
 	if len(req.Ports) == 0 {
@@ -534,7 +534,7 @@ func validatePlan(doc *planDoc) error {
 			if r.Action != actionDockerStop {
 				return bad("resource %q has unsupported action %q", r.ResourceID, r.Action)
 			}
-			if r.GraceSeconds < 0 || time.Duration(r.GraceSeconds)*time.Second > maxGrace {
+			if r.GraceSeconds < 0 || r.GraceSeconds > int(maxGrace/time.Second) {
 				return bad("resource %q has an out-of-range grace period", r.ResourceID)
 			}
 		default:

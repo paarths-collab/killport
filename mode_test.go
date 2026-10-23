@@ -21,6 +21,7 @@ func init() {
 	// binary independent of the developer's shell. Tests that need it use
 	// t.Setenv.
 	os.Unsetenv("DOCKER_CONTEXT")
+	os.Unsetenv("DOCKER_HOST")
 }
 
 var obsIDRe = regexp.MustCompile(`^obs:[0-9a-f]{16}$`)

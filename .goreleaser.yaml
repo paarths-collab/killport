@@ -48,7 +48,7 @@ brews:
       name: homebrew-tap
     directory: Formula
     homepage: "https://github.com/paarths-collab/killport"
-    description: "Lightning-fast, AI-agent optimized port killer."
+    description: "Inspect and free local ports with JSON output and identity-bound plans."
     install: |
       bin.install "killport"
 
@@ -58,4 +58,4 @@ scoops:
       owner: paarths-collab
       name: scoop-bucket
     homepage: "https://github.com/paarths-collab/killport"
-    description: "Lightning-fast, AI-agent optimized port killer."
+    description: "Inspect and free local ports with JSON output and identity-bound plans."

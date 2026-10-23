@@ -107,6 +107,11 @@ func newFake(goos string, tools ...string) *fakeSystem {
 	for _, t := range tools {
 		f.tools[t] = true
 	}
+	endpoint := "unix:///var/run/docker.sock\n"
+	if goos == "windows" {
+		endpoint = "npipe:////./pipe/docker_engine\n"
+	}
+	f.on("docker context inspect --format {{.Endpoints.docker.Host}}", ok(endpoint))
 	return f
 }
 

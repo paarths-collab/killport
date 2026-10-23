@@ -479,6 +479,12 @@ func (s *snapshot) collectDocker(ctx context.Context, sys system) {
 		return
 	}
 	s.dockerAvail = true
+	if err := requireLocalDocker(ctx, sys); err != nil {
+		s.dockerErr = err
+		s.warn("could not query Docker: %v", err)
+		s.addProviderError(provDocker, err, false)
+		return
+	}
 	out, err := runTool(ctx, sys, dockerPSTimeout, "docker", "ps", "--no-trunc", "--format", "{{.ID}}|{{.Names}}|{{.Ports}}")
 	if err != nil {
 		s.dockerErr = fmt.Errorf("docker ps failed: %w", err)

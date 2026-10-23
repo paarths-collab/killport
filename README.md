@@ -6,19 +6,18 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/paarths-collab/killport)](https://goreportcard.com/report/github.com/paarths-collab/killport)
 [![GitHub Release](https://img.shields.io/github/v/release/paarths-collab/killport)](https://github.com/paarths-collab/killport/releases)
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-[![Downloads](https://img.shields.io/badge/Downloads-10k-blue)](https://github.com/paarths-collab/killport/releases)
 
-**The last port killer you'll ever install.** Lightning-fast, concurrent, Docker-native, and optimized for both humans and AI Agents.
+Inspect and free local ports, with JSON output and an optional identity-bound plan/apply workflow.
 
 ---
 
 ## 🚀 Why killport?
 
-Most port killers simply find a PID and send a `kill -9`. This works for simple scripts but fails in modern dev environments. **killport** is engineered for the "Unholy Trinity" of modern workflows:
+Use **killport** to inspect local port owners, preview actions, and check the outcome after stopping a process or container:
 
 - 🐳 **Docker Native:** Safely triggers `docker stop` on containers instead of murdering the `docker-proxy` and leaving zombie containers behind.
-- 🤖 **AI-Agent Optimized:** Machine-readable `--json` output reduces LLM token usage by 90% and eliminates parsing hallucinations.
-- 🎯 **Port Ranges:** Concurrent execution allows you to wipe out entire microservice stacks in one command (e.g., `3000-3010`).
+- 🤖 **AI-Agent Optimized:** Machine-readable `--json` output gives scripts and coding agents explicit owners, actions, failures, and exit classes.
+- 🎯 **Port Ranges:** Bounded concurrent execution handles several requested ports in one command (e.g., `3000-3010`).
 
 ---
 
@@ -36,17 +35,9 @@ scoop bucket add paarths-collab https://github.com/paarths-collab/scoop-bucket
 scoop install killport
 ```
 
-### Windows install options
+### Direct downloads
 
-| Option | Type | Notes |
-|---|---|---|
-| Winget | CLI | Official and fast |
-| Chocolatey | CLI | Massive package repository |
-| Microsoft Store | GUI | Secure and simple |
-| Direct Download | Web | Official source for Windows download |
-
-Direct download:
-- https://github.com/paarths-collab/killport/releases/latest
+Prebuilt archives are available from [GitHub Releases](https://github.com/paarths-collab/killport/releases). Windows users can use Scoop or the Windows archive.
 
 ### Linux / macOS (One-liner)
 ```bash
@@ -108,7 +99,7 @@ killport --check --json
 - **Tools:** macOS uses `lsof`. Linux uses `lsof`, or `ss` if `lsof` is missing. Windows uses `netstat -ano` and `tasklist`. Docker is optional.
 - **Visibility:** without root (Linux/macOS) or Administrator (Windows), sockets owned by other users may be invisible. A listener whose owner is not visible is reported with no PID and is never killed. On Linux, when both tools exist, `ss` is also consulted for ports `lsof` did not show, so such listeners are reported as in use instead of free. If `lsof` exits 1 with no output but prints a message on stderr, killport warns instead of assuming there are no listeners.
 - **Windows process names:** if `tasklist` fails, names are unknown, Docker's own processes cannot be recognised, and killport warns and refuses to kill any PID it cannot name.
-- **Docker:** published host ports (TCP, including ranges and IPv4/IPv6 bindings) are matched to containers. Each container is stopped once with `docker stop -t 10`. Docker's own processes (`docker-proxy`, Docker Desktop backend, `vpnkit`, `containerd`, and similar) are never killed directly. If `docker ps` fails, killport prints a warning to stderr and continues without Docker owners.
+- **Docker:** only daemons reached through a local Unix socket or Windows named pipe may supply local port owners. TCP and SSH endpoints (including loopback TCP endpoints) are refused with a warning; their published ports may belong to another machine. The active Docker context is resolved before querying containers, and `DOCKER_CONTEXT` takes precedence over `DOCKER_HOST`. For supported local daemons, published host ports (TCP, including ranges and IPv4/IPv6 bindings) are matched to containers. Each container is stopped once with `docker stop -t 10`. Docker's own processes (`docker-proxy`, Docker Desktop backend, `vpnkit`, `containerd`, and similar) are never killed directly. If `docker ps` fails, killport prints a warning to stderr and continues without Docker owners.
 - **Protected owners (never signalled):** PID 0 or unknown, PID 1 and below, killport itself, Windows PID 4 (System), and Docker infrastructure that has no container to stop. These rows report `status: "failed"` with the reason.
 - **Dry run (`--dry-run` / `-d`):** changes nothing. Rows have `status: "planned"` and `dry_run: true`, and read `Would kill PID … (name) on port …` or `Would stop Docker container … publishing port …`.
 - **Verification:** after a real kill or stop, killport re-checks the port for about 3 seconds, per owner. A row is `killed` or `stopped` only when its own PID or container is gone; otherwise it fails with `PID P (name) still holds port N after kill_process` (or `port N still in use after stop_container`). Any other owner still on that port (a refused PID, a replacement process with a new PID, a lingering Docker proxy) keeps or gets its own `failed` row, so a `killed` row never means the port is free while a `failed` row for the same port exists. If the re-check itself cannot run, the row is `failed` with `killed, but could not verify the port is free: …` (or `stopped, …`).
@@ -213,13 +204,13 @@ The `inspect`, `plan` and `apply` subcommands also use exit codes 3 and 4. See [
 
 Use this workflow when you want to see exactly which process or container holds a port, bind that answer to the specific process identity, and act on it later. `inspect` and `plan` never change anything. `apply` acts only on what the plan names, and refuses any process whose identity has changed since planning.
 
-The classic `killport <ports>` command is unchanged and remains the default. Nothing in the workflow runs unless you invoke `inspect`, `plan` or `apply`.
+The classic `killport <ports>` command remains the default. Nothing in the workflow runs unless you invoke `inspect`, `plan` or `apply`.
 
 ### When to use it
 
 1. Preview the exact owner of a port (`inspect`).
 2. Save a plan that binds each owner to its process identity or container ID (`plan -o`).
-3. Apply that plan later (`apply`). Apply re-checks each identity before it signals anything.
+3. Apply that plan later (`apply`). Apply refreshes ownership for each resource after it leaves the action queue, then re-checks process identity before signalling. A process proven to have closed all its planned ports is skipped even if Docker is unavailable.
 4. Check the endpoint afterwards. Apply reports whether each port is free, still held by the original owner, or now held by a new owner.
 
 ### Commands and flags
@@ -381,8 +372,8 @@ Apply signals a process only if the PID still belongs to the process that was pl
 
 ### Limits
 
-- The Windows and macOS paths are compiled and vetted, but they have not been run on real machines.
-- The Docker branch is verified only through fakes. The Linux evidence run mounted no Docker socket.
+- The Linux suite, race detector, and native macOS suite have been exercised. A macOS smoke test covered check, inspect, plan, apply, and an owner change with no unintended signals. Windows builds are cross-compiled; the Windows-only process-handle regression test still needs to pass on a real Windows runner before release.
+- Eight live Docker checks passed using the native macOS ARM64 CLI and Docker Desktop's Linux ARM64 daemon: graceful and forced stops, TCP and UDP, multiple publications, replacement protection, and failed or remote endpoint handling. See [platform validation](docs/platform-validation.md) for reproducible scripts and remaining platform limits. The earlier Linux evidence run mounted no Docker socket.
 - Apply never escalates to SIGKILL. If SIGTERM does not free the port, the endpoint is `blocked_by_original` and apply exits 1.
 - `--force` plans SIGKILL on Linux and macOS. On Windows the process is always terminated.
 - The plan is a checksum, not a signature (see above).
@@ -396,37 +387,34 @@ Apply signals a process only if the PID still belongs to the process that was pl
 - `scripts/demo-run.sh` reproduces that run in one `docker run` of `golang:1.25`. It needs Docker and writes into `docs/evidence/` (or `EVIDENCE_DIR`).
 - `testdata/corpus/` holds 44 table-driven cases (`01-` to `44-`). Each directory has one `case.json`. `testdata/corpus/README.md` records for each case whether its input is real, synthetic or mixed. Run them with `go test -count=1 -run Corpus -v ./...`.
 - `acceptance_test.go` has five acceptance tests, `TestAcceptance1_` through `TestAcceptance5_`.
-- The suite had 615 test runs at the time of writing (the `=== RUN` count from `go test -v`). Recount with `go test -v ./... 2>&1 | grep -c '=== RUN'`. Static counts in the source: 169 top-level `Test` functions and 96 `t.Run` call sites.
+- Run the current suite with `go test -count=1 ./...`, and check concurrency with `go test -race -count=1 ./...`. Test counts change as regression cases are added.
 
 ---
 
-## 📊 Comparison
+## Choosing a workflow
 
-| Feature         | kill-port (NPM) | killport (Rust) | killport (Go) |
-|----------------|----------------|-----------------|---------------|
-| Runtime        | Node (Slow)    | Compiled (Fast) | Compiled (Fast) |
-| Binary Size    | N/A (Node req) | ~2MB            | ~2MB (Zero Deps) |
-| Port Ranges    | ❌ No          | ❌ No           | ✅ Yes (3000-3005) |
-| AI-Agent Mode  | ❌ No          | ❌ No           | ✅ Yes (--json) |
-| Docker Stop    | ❌ No          | ✅ Yes          | ✅ Yes |
+| Need | Command | Behavior |
+|---|---|---|
+| Inspect TCP listeners | `killport --check --json` | Read-only snapshot with the classic output format |
+| Preview immediate cleanup | `killport 3000 --dry-run --json` | Lists planned actions without executing them |
+| Free TCP ports immediately | `killport 3000 3001 --json` | Acts on the current owners and verifies the result |
+| Inspect TCP or UDP with visibility details | `killport inspect 3000 --json` | Reports owners, provider errors, and visibility |
+| Review actions before applying them | `killport plan 3000 -o plan.json` | Saves an expiring plan bound to process identities or full container IDs |
+| Apply a reviewed plan | `killport apply plan.json --json` | Refreshes ownership, revalidates identities, and reports endpoint outcomes |
 
+## Machine-readable output
 
----
-
-## 🤖 LLM Token Optimization
-
-If you are using AI Agents (Devin, OpenDevin, Cursor), standard CLI tools waste 500–1,500 tokens per attempt due to unstructured output and ASCII tables.
-
-By using `killport --json`, agents can parse the system state in < 50 tokens, drastically reducing costs and preventing execution errors.
+JSON avoids parsing terminal tables and provides explicit fields for scripts and coding agents. Warnings and verbose diagnostics go to stderr. Output size depends on the number of owners and errors; no token reduction or performance benchmark is claimed.
 
 ---
 
 ## 🛠 Development
 
+In an authorized source checkout, use the whole package (the implementation spans multiple Go files):
+
 ```bash
-git clone https://github.com/paarths-collab/killport.git
-cd killport
-go run main.go --help
+go run . --help
+go test -count=1 ./...
 ```
 
 ---

@@ -282,7 +282,8 @@ func (r readOnlySystem) Run(ctx context.Context, name string, args ...string) ([
 	switch name {
 	case "lsof", "ss", "netstat", "tasklist":
 	case "docker":
-		if len(args) == 0 || args[0] != "ps" {
+		contextLookup := len(args) == len(dockerContextArgs) && strings.Join(args, "\x00") == strings.Join(dockerContextArgs, "\x00")
+		if !contextLookup && (len(args) == 0 || args[0] != "ps") {
 			panic("dry-run attempted a mutating docker command: docker " + strings.Join(args, " "))
 		}
 	default:

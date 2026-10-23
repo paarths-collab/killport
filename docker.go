@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -26,6 +27,36 @@ const (
 	dockerStopTimeout = 45 * time.Second // docker's own stop grace is 10s
 )
 
+var dockerContextArgs = []string{"context", "inspect", "--format", "{{.Endpoints.docker.Host}}"}
+
+// requireLocalDocker prevents a remote daemon's published ports from being
+// mistaken for ports on this machine. DOCKER_CONTEXT takes precedence over
+// DOCKER_HOST; otherwise context inspect resolves the CLI's active context.
+// Only local Unix sockets and Windows named pipes are accepted. TCP/SSH
+// endpoints can address another machine (including through a local tunnel).
+func requireLocalDocker(ctx context.Context, sys system) error {
+	endpoint := ""
+	if strings.TrimSpace(os.Getenv("DOCKER_CONTEXT")) == "" {
+		endpoint = strings.TrimSpace(os.Getenv("DOCKER_HOST"))
+	}
+	if endpoint == "" {
+		out, err := runTool(ctx, sys, dockerPSTimeout, "docker", dockerContextArgs...)
+		if err != nil {
+			return fmt.Errorf("cannot verify Docker's local endpoint: %w", err)
+		}
+		endpoint = strings.TrimSpace(string(out))
+	}
+	if !strings.ContainsAny(endpoint, "\r\n\t ") {
+		if sys.GOOS() != "windows" && strings.HasPrefix(endpoint, "unix:///") {
+			return nil
+		}
+		if sys.GOOS() == "windows" && (strings.HasPrefix(endpoint, "npipe:////./pipe/") || strings.HasPrefix(endpoint, "npipe://./pipe/")) {
+			return nil
+		}
+	}
+	return fmt.Errorf("Docker endpoint is remote or unsupported; only local Unix sockets and Windows named pipes may supply local port owners")
+}
+
 // queryDocker lists running containers. A missing docker binary is silent;
 // a failing `docker ps` yields a warning and no owners.
 func queryDocker(ctx context.Context, sys system) dockerState {
@@ -34,6 +65,10 @@ func queryDocker(ctx context.Context, sys system) dockerState {
 		return st
 	}
 	st.Available = true
+	if err := requireLocalDocker(ctx, sys); err != nil {
+		st.Warning = err.Error()
+		return st
+	}
 	out, err := runTool(ctx, sys, dockerPSTimeout, "docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Ports}}")
 	if err != nil {
 		st.Warning = fmt.Sprintf("could not query Docker (%v); Docker-published ports may be missing from the results", err)
