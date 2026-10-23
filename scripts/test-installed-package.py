@@ -19,7 +19,7 @@ binary = shutil.which("killport")
 require(binary, "killport is missing from the package manager's PATH")
 env = os.environ.copy()
 # These native socket checks must not depend on a runner's Docker daemon.
-env["PATH"] = (os.path.join(env["SystemRoot"], "System32") if os.name == "nt"
+env["PATH"] = (os.path.join(os.environ["SystemRoot"], "System32") if os.name == "nt"
                else "/usr/bin:/bin:/usr/sbin:/sbin")
 
 
@@ -81,7 +81,10 @@ with tempfile.TemporaryDirectory(prefix="killport-package-") as directory:
             applied = cli("apply", plan_path)
             require(applied["actions_executed"] == 1 and
                     all(endpoint["status"] == "free" for endpoint in applied["endpoints"]) and
-                    applied["resources"][0]["verified_gone"], "Apply did not verify the port was freed")
+                    applied["resources"][0]["result"] == "signal_sent",
+                    f"Apply did not verify the port was freed: {applied}")
+            # Unix retains this parent's exited child as a zombie until wait().
+            # Assert actual child termination independently of PID disappearance.
             process.wait(timeout=5)
             print(f"PASS {protocol.upper()} inspect, plan and apply free the owned listener", flush=True)
 
