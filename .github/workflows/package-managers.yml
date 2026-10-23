@@ -1,0 +1,43 @@
+name: package managers
+
+on:
+  push:
+    branches: ['repair/package-manager-validation-1.2.0']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  homebrew:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install and upgrade the public Homebrew package
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"; fi
+          bash scripts/test-homebrew-package.sh
+  scoop:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install and upgrade the public Scoop package
+        shell: pwsh
+        run: ./scripts/test-scoop-package.ps1

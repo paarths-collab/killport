@@ -26,7 +26,7 @@ Use **killport** to inspect local port owners, preview actions, and check the ou
 ### macOS (Homebrew)
 ```bash
 brew tap paarths-collab/homebrew-tap
-brew install killport
+brew install paarths-collab/tap/killport
 ```
 
 ### Windows (Scoop)
