@@ -56,9 +56,9 @@ and termination regression to pass. It then starts its own loopback TCP and UDP
 listeners, verifies that plans name only those child PIDs, and exercises
 plan/apply, read-only previews, owner changes, and classic termination. Process
 cleanup is restricted to children created by the script. Native inspect and plan
-checks explicitly select `--mode native`, so a Docker CLI installed in a Windows
-system directory cannot make these socket checks depend on a stopped daemon.
-The command search path is also restricted; Docker is tested separately.
+checks explicitly select `--mode native`. The child environment is rebuilt with
+a restricted command search path, and the script checks that Docker cannot be
+resolved before starting. Docker is tested separately.
 
 Logs are written under a fresh temporary directory, or a fresh directory passed
 with `-LogDirectory`. Keep logs local when they contain machine-specific details.

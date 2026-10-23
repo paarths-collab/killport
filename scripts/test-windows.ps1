@@ -40,8 +40,15 @@ function Invoke-Native([string]$Executable, [string[]]$Arguments, [string]$Worki
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    # Isolate native socket tests from any user-selected Docker daemon.
-    $start.EnvironmentVariables['PATH'] = Join-Path $env:SystemRoot 'System32'
+    # Rebuild the environment rather than leaving inherited Path/PATH aliases.
+    # These native socket tests must not discover a user-selected Docker CLI.
+    $start.Environment.Clear()
+    foreach ($name in @('SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'COMSPEC')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value) { $start.Environment[$name] = $value }
+    }
+    $start.Environment['PATH'] = Join-Path $env:SystemRoot 'System32'
+    $start.Environment['PATHEXT'] = '.COM;.EXE;.BAT;.CMD'
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $start
     [void]$process.Start()
@@ -120,6 +127,8 @@ function Assert-OwnedPlan($Plan, $Listener) {
 }
 
 try {
+    $lookup = Invoke-Native -Executable (Join-Path $env:SystemRoot 'System32/where.exe') -Arguments @('docker') -WorkingDirectory $work
+    Assert-True ($lookup.Code -eq 1) 'Native test environment must not resolve a Docker executable.'
     $suite = Invoke-Native -Executable $TestBinary -Arguments @('-test.v', '-test.count=1') -WorkingDirectory (Split-Path $TestBinary)
     $suite.Out | Set-Content -Encoding UTF8 -Path (Join-Path $LogDirectory 'go-tests.log')
     $suite.Err | Set-Content -Encoding UTF8 -Path (Join-Path $LogDirectory 'go-tests-stderr.log')
