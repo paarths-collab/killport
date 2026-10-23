@@ -5,6 +5,12 @@ export HOMEBREW_NO_INSTALL_CLEANUP=1
 export HOMEBREW_NO_ENV_HINTS=1
 export HOMEBREW_NO_ANALYTICS=1
 
+# Disposable Intel images ship an old Azure CLI formula that brew update
+# migrates to a cask, compiling unrelated dependencies before it returns.
+if [[ "$RUNNER_OS" == macOS && "$(uname -m)" == x86_64 && -d "$(brew --cellar)/azure-cli" ]]; then
+  brew uninstall --formula --force --ignore-dependencies azure-cli
+fi
+
 brew tap paarths-collab/tap
 brew trust --tap paarths-collab/tap
 brew info --json=v2 killport-cli > "$RUNNER_TEMP/killport-alias-info.json"

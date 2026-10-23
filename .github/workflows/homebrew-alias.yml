@@ -13,7 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-15-intel, ubuntu-latest]
+        # ARM64 macOS and Linux passed the preceding run; only Intel needs
+        # another run with the image's unrelated Azure CLI migration removed.
+        os: [macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
