@@ -17,15 +17,34 @@ def require(condition, message):
 
 binary = shutil.which("killport")
 require(binary, "killport is missing from the package manager's PATH")
-env = os.environ.copy()
-# These native socket checks must not depend on a runner's Docker daemon.
-env["PATH"] = (os.path.join(os.environ["SystemRoot"], "System32") if os.name == "nt"
-               else "/usr/bin:/bin:/usr/sbin:/sbin")
+# Hosted Windows images can include docker.exe in System32. Match the source
+# Windows suite: expose only the real inspection tools and their MUI resources.
+native_tools = None
+if os.name == "nt":
+    native_tools = tempfile.TemporaryDirectory(prefix="killport-native-tools-")
+    tools = Path(native_tools.name)
+    system32 = Path(os.environ["SystemRoot"]) / "System32"
+    for name in ("netstat.exe", "tasklist.exe"):
+        shutil.copyfile(system32 / name, tools / name)
+        for resource in system32.glob("*/" + name + ".mui"):
+            target = tools / resource.parent.name / resource.name
+            target.parent.mkdir(exist_ok=True)
+            shutil.copyfile(resource, target)
+    env = {name: os.environ[name] for name in
+           ("SystemRoot", "WINDIR", "TEMP", "TMP", "COMSPEC") if name in os.environ}
+    env.update(PATH=str(tools), PATHEXT=".COM;.EXE;.BAT;.CMD")
+    lookup = subprocess.run([str(system32 / "where.exe"), "docker"], env=env,
+                            cwd=tools, capture_output=True, text=True)
+    require(lookup.returncode == 1, "Native test environment must not resolve Docker")
+else:
+    env = os.environ.copy()
+    env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 
 def cli(*args):
     result = subprocess.run([binary, *map(str, args), "--json"], env=env,
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True, timeout=30,
+                            cwd=native_tools.name if native_tools else None)
     require(result.returncode == 0,
             f"killport {args} failed ({result.returncode}): {result.stderr} {result.stdout}")
     return json.loads(result.stdout)
