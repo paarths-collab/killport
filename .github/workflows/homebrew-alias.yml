@@ -1,0 +1,30 @@
+name: Homebrew short alias
+
+on:
+  push:
+    branches: ['validation/homebrew-short-alias']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install-and-upgrade:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify the public short alias, fresh install and upgrade
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"; fi
+          bash scripts/test-homebrew-alias.sh
