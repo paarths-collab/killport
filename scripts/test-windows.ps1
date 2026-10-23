@@ -128,7 +128,7 @@ function Assert-OwnedPlan($Plan, $Listener) {
 
 try {
     $lookup = Invoke-Native -Executable (Join-Path $env:SystemRoot 'System32/where.exe') -Arguments @('docker') -WorkingDirectory $work
-    Assert-True ($lookup.Code -eq 1) 'Native test environment must not resolve a Docker executable.'
+    Assert-True ($lookup.Code -eq 1) "Native test environment must not resolve Docker (exit $($lookup.Code)): $($lookup.Out) $($lookup.Err)"
     $suite = Invoke-Native -Executable $TestBinary -Arguments @('-test.v', '-test.count=1') -WorkingDirectory (Split-Path $TestBinary)
     $suite.Out | Set-Content -Encoding UTF8 -Path (Join-Path $LogDirectory 'go-tests.log')
     $suite.Err | Set-Content -Encoding UTF8 -Path (Join-Path $LogDirectory 'go-tests-stderr.log')
