@@ -131,10 +131,10 @@ try {
     foreach ($protocol in @('tcp', 'udp')) {
         $listener = Start-Listener -Protocol $protocol
         $port = [string]$listener.Port
-        $observation = Invoke-Killport -Arguments @('inspect', $port, '--protocol', $protocol)
+        $observation = Invoke-Killport -Arguments @('inspect', $port, '--protocol', $protocol, '--mode', 'native')
         Assert-True ($observation.endpoints[0].occupied -and $observation.endpoints[0].owners[0].pid -eq $listener.Process.Id) 'Inspect did not identify the owned listener.'
         $planPath = Join-Path $work ($protocol + '-plan.json')
-        $plan = Invoke-Killport -Arguments @('plan', $port, '--protocol', $protocol, '--grace', '2s', '-o', $planPath)
+        $plan = Invoke-Killport -Arguments @('plan', $port, '--protocol', $protocol, '--mode', 'native', '--grace', '2s', '-o', $planPath)
         Assert-OwnedPlan $plan $listener
         $result = Invoke-Killport -Arguments @('apply', $planPath)
         Assert-True ($result.actions_executed -eq 1 -and $result.endpoints[0].status -eq 'free') 'Planned endpoint did not become free.'
@@ -152,7 +152,7 @@ try {
     Pass 'classic check and dry-run preserve the owned listener'
 
     $driftPath = Join-Path $work 'drift-plan.json'
-    $plan = Invoke-Killport -Arguments @('plan', $port, '--grace', '0s', '-o', $driftPath)
+    $plan = Invoke-Killport -Arguments @('plan', $port, '--mode', 'native', '--grace', '0s', '-o', $driftPath)
     Assert-OwnedPlan $plan $original
     [IO.File]::WriteAllText($original.Control, 'close')
     $clock = [Diagnostics.Stopwatch]::StartNew()

@@ -26,13 +26,15 @@ Use **killport** to inspect local port owners, preview actions, and check the ou
 ### macOS (Homebrew)
 ```bash
 brew tap paarths-collab/homebrew-tap
-brew install killport
+brew install paarths-collab/tap/killport
 ```
+
+The qualified formula name selects this project; Homebrew core also contains a different `killport`.
 
 ### Windows (Scoop)
 ```powershell
 scoop bucket add paarths-collab https://github.com/paarths-collab/scoop-bucket
-scoop install killport
+scoop install paarths-collab/killport
 ```
 
 ### Direct downloads

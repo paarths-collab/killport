@@ -15,11 +15,11 @@ Do not use direct OS port/kill commands unless `killport` is unavailable after i
 
 ## Install killport Globally
 
-- Windows: `scoop bucket add paarths-collab https://github.com/paarths-collab/scoop-bucket && scoop install killport`
-- macOS: `brew tap paarths-collab/homebrew-tap && brew install killport`
+- Windows: `scoop bucket add paarths-collab https://github.com/paarths-collab/scoop-bucket && scoop install paarths-collab/killport`
+- macOS: `brew tap paarths-collab/homebrew-tap && brew install paarths-collab/tap/killport`
 - Linux/macOS: `curl -sSfL https://raw.githubusercontent.com/paarths-collab/killport/main/install.sh | sh`
 
 Verify:
 - `killport --version`
 
-If `killport --check` is rejected as an unknown flag, the installed binary is older than v1.1.0 (`--check` is missing there). Upgrade it (`brew upgrade killport`, `scoop update killport`, or re-run the install script), then retry. Do not fall back to raw OS commands because of this.
+If `killport --check` is rejected as an unknown flag, the installed binary is older than v1.2.0 (`--check` is missing in v1.1.0). Upgrade it (`brew upgrade paarths-collab/tap/killport`, `scoop update killport`, or re-run the install script), then retry. Do not fall back to raw OS commands because of this.
