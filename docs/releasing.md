@@ -50,7 +50,16 @@ automatic commits would not preserve the required local commit identity. The
 release workflow therefore needs no cross-repository publishing token.
 
 After updating the package repositories, fetch the public formula and manifest
-again, confirm their version/URLs/hashes, and check the native release binary's
-`--version` and JSON help. Existing users can then run `brew update` followed by
+again and confirm their version/URLs/hashes. On disposable native machines,
+exercise both a fresh installation and an upgrade from the previous published
+version through each package manager. Check the executable resolved from `PATH`,
+its `--version --json`, TCP/UDP inspect and plan/apply, and classic dry-run and
+termination against listeners created by the test. Checking a downloaded binary
+alone does not establish that installation, linking or upgrading works.
+
+Use `brew install paarths-collab/tap/killport` for a fresh Homebrew install:
+Homebrew core also contains a different project named `killport`. For Scoop,
+add the public bucket and use `scoop install paarths-collab/killport`.
+Existing users run `brew update` followed by
 `brew upgrade paarths-collab/tap/killport`, or `scoop update` followed by
 `scoop update killport`.

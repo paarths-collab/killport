@@ -29,12 +29,12 @@ When Docker port mappings are present, the agent must treat Docker owners report
 
 Windows (Scoop):
 - `scoop bucket add paarths-collab https://github.com/paarths-collab/scoop-bucket`
-- `scoop install killport`
+- `scoop install paarths-collab/killport`
 - `killport --version`
 
 macOS (Homebrew):
 - `brew tap paarths-collab/homebrew-tap`
-- `brew install killport`
+- `brew install paarths-collab/tap/killport`
 - `killport --version`
 
 Linux/macOS (script):
@@ -43,7 +43,7 @@ Linux/macOS (script):
 
 ## Version Check
 
-`--check` needs killport newer than v1.1.0. If `killport --check` is rejected as an unknown flag, the installed binary is too old: upgrade it (`brew upgrade killport`, `scoop update killport`, or re-run the install script), then retry. Do not fall back to raw OS commands because of this.
+`--check` needs killport newer than v1.1.0. If `killport --check` is rejected as an unknown flag, the installed binary is too old: upgrade it (`brew upgrade paarths-collab/tap/killport`, `scoop update killport`, or re-run the install script), then retry. Do not fall back to raw OS commands because of this.
 
 ## Fallback Rule
 

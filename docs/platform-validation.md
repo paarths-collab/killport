@@ -55,9 +55,10 @@ The script runs the full Go suite and requires the real process-handle identity
 and termination regression to pass. It then starts its own loopback TCP and UDP
 listeners, verifies that plans name only those child PIDs, and exercises
 plan/apply, read-only previews, owner changes, and classic termination. Process
-cleanup is restricted to children created by the script. Native socket tests
-exclude Docker from their command search path so a selected Docker daemon cannot
-affect them; Docker is tested separately.
+cleanup is restricted to children created by the script. Native inspect and plan
+checks explicitly select `--mode native`. The child environment is rebuilt with
+a restricted command search path, and the script checks that Docker cannot be
+resolved before starting. Docker is tested separately.
 
 Logs are written under a fresh temporary directory, or a fresh directory passed
 with `-LogDirectory`. Keep logs local when they contain machine-specific details.
@@ -88,3 +89,32 @@ execution and Windows Docker behavior remain unverified. The hosted validation
 used PowerShell 7; the script's Windows PowerShell 5.1 compatibility has not been
 runtime-tested. Neither Linux PowerShell nor cross-compilation counts as native
 Windows validation.
+
+## Package-manager installation and upgrades
+
+The public v1.2.0 packages passed real fresh-install and v1.1.0-to-v1.2.0 upgrade
+checks on 2026-10-23 in
+[run 39977076637](https://github.com/paarths-collab/killport/actions/runs/39977076637):
+
+| Package manager | Native platform | Fresh install | Upgrade |
+| --- | --- | --- | --- |
+| Homebrew | macOS 15 ARM64 | Passed | Passed |
+| Homebrew | macOS 15 Intel | Passed | Passed |
+| Homebrew | Linux x64 | Passed | Passed |
+| Scoop | Windows x64 | Passed | Passed |
+
+Each runner added the public tap or bucket, installed the package, and exercised
+the executable resolved from `PATH`, including Scoop's shim. It then removed
+the fresh installation, checked out the published v1.1.0 package definition in
+its disposable local tap/bucket, installed the actual old release, and ran
+`brew update` plus `brew upgrade paarths-collab/tap/killport`, or `scoop update`
+plus `scoop update killport`, against the unchanged public remote.
+
+After both installation paths, `--version --json` reported `1.2.0`, JSON command
+help worked, TCP and UDP inspect/plan/apply identified and terminated only
+test-created listeners, and classic check/dry-run/termination passed. Both
+package managers verified archive hashes during installation. Homebrew's formula
+test also passed. These checks did not run Linux ARM64 or Windows ARM64 natively.
+
+Use the qualified Homebrew formula name for installation: core's unqualified
+`killport` names a different project.

@@ -21,6 +21,20 @@ New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 $LogDirectory = (Resolve-Path $LogDirectory).Path
 $work = Join-Path $LogDirectory 'scratch'
 New-Item -ItemType Directory -Path $work | Out-Null
+$tools = Join-Path $work 'native-tools'
+New-Item -ItemType Directory -Path $tools | Out-Null
+# Some hosted images put docker.exe in System32. Expose only the two real
+# Windows inspection tools, including their localized resource files.
+foreach ($tool in @('netstat.exe', 'tasklist.exe')) {
+    Copy-Item (Join-Path $env:SystemRoot "System32/$tool") (Join-Path $tools $tool)
+    foreach ($culture in @('en-US', [Globalization.CultureInfo]::CurrentUICulture.Name) | Select-Object -Unique) {
+        $resource = Join-Path $env:SystemRoot "System32/$culture/$tool.mui"
+        if (Test-Path $resource) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $tools $culture) | Out-Null
+            Copy-Item $resource (Join-Path $tools "$culture/$tool.mui")
+        }
+    }
+}
 $children = New-Object 'System.Collections.Generic.List[object]'
 $summary = New-Object 'System.Collections.Generic.List[string]'
 $shell = (Get-Process -Id $PID).Path
@@ -40,8 +54,15 @@ function Invoke-Native([string]$Executable, [string[]]$Arguments, [string]$Worki
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    # Isolate native socket tests from any user-selected Docker daemon.
-    $start.EnvironmentVariables['PATH'] = Join-Path $env:SystemRoot 'System32'
+    # Rebuild the environment rather than leaving inherited Path/PATH aliases.
+    # These native socket tests must not discover a user-selected Docker CLI.
+    $start.Environment.Clear()
+    foreach ($name in @('SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'COMSPEC')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value) { $start.Environment[$name] = $value }
+    }
+    $start.Environment['PATH'] = $tools
+    $start.Environment['PATHEXT'] = '.COM;.EXE;.BAT;.CMD'
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $start
     [void]$process.Start()
@@ -120,6 +141,8 @@ function Assert-OwnedPlan($Plan, $Listener) {
 }
 
 try {
+    $lookup = Invoke-Native -Executable (Join-Path $env:SystemRoot 'System32/where.exe') -Arguments @('docker') -WorkingDirectory $work
+    Assert-True ($lookup.Code -eq 1) "Native test environment must not resolve Docker (exit $($lookup.Code)): $($lookup.Out) $($lookup.Err)"
     $suite = Invoke-Native -Executable $TestBinary -Arguments @('-test.v', '-test.count=1') -WorkingDirectory (Split-Path $TestBinary)
     $suite.Out | Set-Content -Encoding UTF8 -Path (Join-Path $LogDirectory 'go-tests.log')
     $suite.Err | Set-Content -Encoding UTF8 -Path (Join-Path $LogDirectory 'go-tests-stderr.log')
@@ -131,10 +154,10 @@ try {
     foreach ($protocol in @('tcp', 'udp')) {
         $listener = Start-Listener -Protocol $protocol
         $port = [string]$listener.Port
-        $observation = Invoke-Killport -Arguments @('inspect', $port, '--protocol', $protocol)
+        $observation = Invoke-Killport -Arguments @('inspect', $port, '--protocol', $protocol, '--mode', 'native')
         Assert-True ($observation.endpoints[0].occupied -and $observation.endpoints[0].owners[0].pid -eq $listener.Process.Id) 'Inspect did not identify the owned listener.'
         $planPath = Join-Path $work ($protocol + '-plan.json')
-        $plan = Invoke-Killport -Arguments @('plan', $port, '--protocol', $protocol, '--grace', '2s', '-o', $planPath)
+        $plan = Invoke-Killport -Arguments @('plan', $port, '--protocol', $protocol, '--mode', 'native', '--grace', '2s', '-o', $planPath)
         Assert-OwnedPlan $plan $listener
         $result = Invoke-Killport -Arguments @('apply', $planPath)
         Assert-True ($result.actions_executed -eq 1 -and $result.endpoints[0].status -eq 'free') 'Planned endpoint did not become free.'
@@ -152,7 +175,7 @@ try {
     Pass 'classic check and dry-run preserve the owned listener'
 
     $driftPath = Join-Path $work 'drift-plan.json'
-    $plan = Invoke-Killport -Arguments @('plan', $port, '--grace', '0s', '-o', $driftPath)
+    $plan = Invoke-Killport -Arguments @('plan', $port, '--mode', 'native', '--grace', '0s', '-o', $driftPath)
     Assert-OwnedPlan $plan $original
     [IO.File]::WriteAllText($original.Control, 'close')
     $clock = [Diagnostics.Stopwatch]::StartNew()
