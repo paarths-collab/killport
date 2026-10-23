@@ -15,11 +15,12 @@ the license text they were published with. In particular, the v1.2.0 source
 archive still contains the previous proprietary license. Do not label that
 archive MIT in a core formula or rewrite its published tag.
 
-Before submitting, publish a new stable release from the MIT-licensed source,
-verify that its source archive contains the MIT license, and calculate its
-SHA-256. Use that immutable source archive in the formula, rather than the tap's
-platform-specific precompiled binaries. No new release is created merely by
-changing the license file on the default branch.
+v1.2.1 is the first release prepared with MIT in every platform archive and MIT
+metadata in the Homebrew and Scoop packages. Before submitting to core, verify
+that the v1.2.1 source archive contains the MIT license and calculate its SHA-256.
+Use that immutable source archive in the formula, rather than the tap's
+platform-specific precompiled binaries. Licensing alone does not establish
+eligibility under the adoption and review policy below.
 
 ## Adoption and review
 

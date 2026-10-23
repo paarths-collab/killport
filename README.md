@@ -449,6 +449,6 @@ go test -count=1 ./...
 
 ## 📄 License
 
-Licensed under the [MIT License](LICENSE). Source code may be used, modified and redistributed under its terms. Historical release archives retain their original license files; the MIT license is included in the current source and subsequent releases.
+Licensed under the [MIT License](LICENSE). Source code may be used, modified and redistributed under its terms. Historical release archives retain their original license files; v1.2.1 is the first MIT-licensed release, with MIT included in every platform archive.
 
 See [Homebrew core submission readiness](docs/homebrew-core.md) for the remaining release and adoption requirements before `killport-cli` can be proposed for core.
