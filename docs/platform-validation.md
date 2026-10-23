@@ -64,7 +64,27 @@ with `-LogDirectory`. Keep logs local when they contain machine-specific details
 `summary.log` is written only after all checks pass; `failure.log` records a
 failure. The runner refuses to execute on non-Windows systems.
 
-As of 2026-10-22, x64 and ARM64 CLI and test executables cross-compile, and the
-runner passes PowerShell syntax checks. Native Windows execution remains
-pending a Windows machine or runner. Neither Linux PowerShell nor successful
-cross-compilation counts as that validation.
+On 2026-10-23, native Windows x64 validation passed on GitHub Actions in
+[run 39965983069](https://github.com/paarths-collab/killport/actions/runs/39965983069),
+for source commit `513781a079bed2ed97eb9f008753da1875116f63`. The same run passed
+Linux and macOS. Its `windows-validation` artifact contains the full Go-suite
+log and a summary confirming all six Windows validation groups:
+
+1. The full Go suite, including real process-handle identity and termination.
+2. TCP inspect and plan/apply, with the owned process terminated and its endpoint
+   verified free.
+3. The equivalent UDP workflow.
+4. Classic check and dry-run preserve the owned listener.
+5. Owner drift executes zero actions and preserves both processes.
+6. Classic termination stops only the owned replacement process.
+
+The first hosted Windows run exposed automatic LF-to-CRLF checkout conversion
+of a captured Linux fixture. `.gitattributes` now preserves every `testdata/`
+fixture byte-for-byte; the complete Windows suite and smoke checks passed after
+that correction. Deliberate CRLF and CRCRLF parser inputs remain unchanged.
+
+Windows ARM64 CLI and test executables cross-compile, but native ARM64 Windows
+execution and Windows Docker behavior remain unverified. The hosted validation
+used PowerShell 7; the script's Windows PowerShell 5.1 compatibility has not been
+runtime-tested. Neither Linux PowerShell nor cross-compilation counts as native
+Windows validation.

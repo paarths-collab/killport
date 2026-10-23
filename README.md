@@ -372,7 +372,7 @@ Apply signals a process only if the PID still belongs to the process that was pl
 
 ### Limits
 
-- The Linux suite, race detector, and native macOS suite have been exercised. A macOS smoke test covered check, inspect, plan, apply, and an owner change with no unintended signals. Windows builds are cross-compiled; the Windows-only process-handle regression test still needs to pass on a real Windows runner before release.
+- The hosted Linux, macOS, and Windows suites passed on 2026-10-23. Linux also passed the race detector and installer regressions. Native Windows checks covered real process-handle identity and termination, TCP/UDP inspect and plan/apply, dry-run, owner drift with zero actions, and classic termination. A separate macOS smoke test covered check, inspect, plan, apply, and owner drift. See [platform validation](docs/platform-validation.md) for the evidence and remaining limits.
 - Eight live Docker checks passed using the native macOS ARM64 CLI and Docker Desktop's Linux ARM64 daemon: graceful and forced stops, TCP and UDP, multiple publications, replacement protection, and failed or remote endpoint handling. See [platform validation](docs/platform-validation.md) for reproducible scripts and remaining platform limits. The earlier Linux evidence run mounted no Docker socket.
 - Apply never escalates to SIGKILL. If SIGTERM does not free the port, the endpoint is `blocked_by_original` and apply exits 1.
 - `--force` plans SIGKILL on Linux and macOS. On Windows the process is always terminated.
