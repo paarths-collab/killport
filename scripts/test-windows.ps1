@@ -21,6 +21,20 @@ New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 $LogDirectory = (Resolve-Path $LogDirectory).Path
 $work = Join-Path $LogDirectory 'scratch'
 New-Item -ItemType Directory -Path $work | Out-Null
+$tools = Join-Path $work 'native-tools'
+New-Item -ItemType Directory -Path $tools | Out-Null
+# Some hosted images put docker.exe in System32. Expose only the two real
+# Windows inspection tools, including their localized resource files.
+foreach ($tool in @('netstat.exe', 'tasklist.exe')) {
+    Copy-Item (Join-Path $env:SystemRoot "System32/$tool") (Join-Path $tools $tool)
+    foreach ($culture in @('en-US', [Globalization.CultureInfo]::CurrentUICulture.Name) | Select-Object -Unique) {
+        $resource = Join-Path $env:SystemRoot "System32/$culture/$tool.mui"
+        if (Test-Path $resource) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $tools $culture) | Out-Null
+            Copy-Item $resource (Join-Path $tools "$culture/$tool.mui")
+        }
+    }
+}
 $children = New-Object 'System.Collections.Generic.List[object]'
 $summary = New-Object 'System.Collections.Generic.List[string]'
 $shell = (Get-Process -Id $PID).Path
@@ -47,7 +61,7 @@ function Invoke-Native([string]$Executable, [string[]]$Arguments, [string]$Worki
         $value = [Environment]::GetEnvironmentVariable($name)
         if ($value) { $start.Environment[$name] = $value }
     }
-    $start.Environment['PATH'] = Join-Path $env:SystemRoot 'System32'
+    $start.Environment['PATH'] = $tools
     $start.Environment['PATHEXT'] = '.COM;.EXE;.BAT;.CMD'
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $start
