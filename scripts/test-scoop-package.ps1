@@ -9,7 +9,9 @@ scoop bucket add paarths-collab https://github.com/paarths-collab/scoop-bucket
 scoop install paarths-collab/killport
 scoop list killport
 $installedLicense = Join-Path (scoop prefix killport | Select-Object -Last 1) 'LICENSE'
-if ((Get-FileHash $installedLicense).Hash -ne (Get-FileHash LICENSE).Hash) { throw 'Installed license differs from MIT source license' }
+# Compare with the committed blob, not Windows checkout CRLF conversion.
+python -c 'import pathlib, subprocess, sys; assert pathlib.Path(sys.argv[1]).read_bytes() == subprocess.check_output(["git", "show", "HEAD:LICENSE"]), "Installed license differs from committed MIT license"' $installedLicense
+if ($LASTEXITCODE -ne 0) { throw 'Installed license verification failed' }
 python scripts/test-installed-package.py
 Write-Output 'PASS Scoop fresh install delivers functional v1.2.1 through its PATH shim'
 scoop uninstall killport
@@ -26,6 +28,8 @@ scoop update
 scoop update killport
 scoop list killport
 $installedLicense = Join-Path (scoop prefix killport | Select-Object -Last 1) 'LICENSE'
-if ((Get-FileHash $installedLicense).Hash -ne (Get-FileHash LICENSE).Hash) { throw 'Installed license differs from MIT source license' }
+# Compare with the committed blob, not Windows checkout CRLF conversion.
+python -c 'import pathlib, subprocess, sys; assert pathlib.Path(sys.argv[1]).read_bytes() == subprocess.check_output(["git", "show", "HEAD:LICENSE"]), "Installed license differs from committed MIT license"' $installedLicense
+if ($LASTEXITCODE -ne 0) { throw 'Installed license verification failed' }
 python scripts/test-installed-package.py
 Write-Output 'PASS Scoop v1.2.0 -> scoop update -> scoop update killport delivers functional v1.2.1'

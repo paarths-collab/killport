@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   homebrew:
+    # Homebrew passes are recorded in run 40000573617; rerun only Windows here.
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
