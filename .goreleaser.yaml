@@ -37,25 +37,8 @@ changelog:
       - '^test:'
 
 release:
+  # Publish only after the archives and generated package manifests are checked.
+  draft: true
   github:
     owner: paarths-collab
     name: killport
-
-brews:
-  - name: killport
-    repository:
-      owner: paarths-collab
-      name: homebrew-tap
-    directory: Formula
-    homepage: "https://github.com/paarths-collab/killport"
-    description: "Inspect and free local ports with JSON output and identity-bound plans."
-    install: |
-      bin.install "killport"
-
-scoops:
-  - name: killport
-    repository:
-      owner: paarths-collab
-      name: scoop-bucket
-    homepage: "https://github.com/paarths-collab/killport"
-    description: "Inspect and free local ports with JSON output and identity-bound plans."

@@ -86,9 +86,23 @@ killport 5432 --json
 killport --check --json
 ```
 
-### Version requirement for `--check`
+### Version requirements and upgrades
 
-`--check` exists in source builds newer than v1.1.0. The published v1.1.0 packages (Homebrew, Scoop, install script) do not have it; they exit non-zero with an unknown-flag error. Run `killport --version` to see the installed version. Source builds without release version information report `dev`.
+`--check` and the `inspect`, `plan`, and `apply` workflow are available in **v1.2.0 and later**. Published v1.1.0 packages do not include them. Run `killport --version` to check your installation. Source builds without release version information report `dev`.
+
+Upgrade an existing package installation:
+
+```sh
+brew update
+brew upgrade paarths-collab/tap/killport
+```
+
+```powershell
+scoop update
+scoop update killport
+```
+
+For script installations, rerun the installation command above; it verifies the new archive before replacing the binary.
 
 ---
 

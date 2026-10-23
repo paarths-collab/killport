@@ -32,7 +32,45 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: latest
+          version: v2.19.0
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate package manifests
+        run: python3 scripts/package-manifests.py --version "$GITHUB_REF_NAME" --checksums dist/checksums.txt --output dist/package-manifests
+
+      - name: Generated package manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-manifests
+          path: dist/package-manifests/
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-release-smoke:
+    needs: goreleaser
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verify and run packaged Windows binary
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $archive = "killport_${version}_windows_amd64.zip"
+          gh release download $env:GITHUB_REF_NAME --pattern $archive --pattern checksums.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Release download failed' }
+          $line = Get-Content checksums.txt | Where-Object { ($_ -split '\s+')[-1] -eq $archive }
+          if (@($line).Count -ne 1) { throw 'Expected exactly one archive checksum' }
+          $expected = ($line -split '\s+')[0]
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected.ToLowerInvariant()) { throw 'Archive checksum mismatch' }
+          Expand-Archive $archive -DestinationPath unpacked
+          $result = & .\unpacked\killport.exe --version --json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $result.version -ne $version) { throw 'Packaged binary version mismatch' }
+          $helpDoc = & .\unpacked\killport.exe plan --help --json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $helpDoc.usage) { throw 'Packaged plan command is unavailable' }
+          Write-Output "Verified Windows archive SHA-256 and killport $version CLI"
