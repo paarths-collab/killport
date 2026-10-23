@@ -16,6 +16,8 @@ def generate(version, checksums, output):
     version = version.removeprefix("v")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("expected a stable MAJOR.MINOR.PATCH version")
+    # Historical archives keep their original license; MIT starts at v1.2.1.
+    mit_licensed = tuple(map(int, version.split("."))) >= (1, 2, 1)
     hashes = {}
     for line in checksums.read_text().splitlines():
         fields = line.split()
@@ -44,6 +46,8 @@ def generate(version, checksums, output):
         '  homepage "https://github.com/paarths-collab/killport"',
         f'  version "{version}"',
     ]
+    if mit_licensed:
+        lines.append('  license "MIT"')
     for brew_os, os_name in (("macos", "darwin"), ("linux", "linux")):
         lines += ["", f"  on_{brew_os} do"]
         for cpu, arch in (("intel", "amd64"), ("arm", "arm64")):
@@ -73,6 +77,8 @@ def generate(version, checksums, output):
         "homepage": "https://github.com/paarths-collab/killport",
         "description": description,
     }
+    if mit_licensed:
+        scoop["license"] = "MIT"
     (output / "Formula").mkdir(parents=True, exist_ok=True)
     (output / "Formula" / "killport.rb").write_text("\n".join(lines))
     (output / "killport.json").write_text(json.dumps(scoop, indent=4) + "\n")

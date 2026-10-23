@@ -26,7 +26,7 @@ The release workflow uploads them as the `package-manifests` Actions artifact.
 For a local copy, run:
 
 ```sh
-python3 scripts/package-manifests.py --version v1.2.0 \
+python3 scripts/package-manifests.py --version v1.2.1 \
   --checksums checksums.txt --output package-manifests
 ```
 
@@ -34,6 +34,11 @@ Before publication, download all six release archives and independently verify
 their SHA-256 values against `checksums.txt`. Also compare every generated
 package URL and hash with the corresponding archive. A checksum detects damaged
 or mismatched downloads; it is not a signature or proof of publisher identity.
+
+Starting with v1.2.1, every binary archive must contain the exact MIT `LICENSE`
+from the tagged source. Verify all six archives and the tag's source archive
+before publication. Generated Homebrew and Scoop definitions declare MIT for
+v1.2.1 and later; older archives retain their original license metadata.
 
 Publish the verified draft, then copy the generated definitions to
 `paarths-collab/homebrew-tap` (`Formula/killport.rb`) and
