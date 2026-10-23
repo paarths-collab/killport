@@ -9,6 +9,11 @@ Windows AMD64 executable after verifying the archive checksum. Check the entire
 release workflow before publishing the draft. Source-level platform validation
 and its limits are described in [platform-validation.md](platform-validation.md).
 
+The workflow can also be dispatched manually with an existing `tag` to rerun
+packaged Windows verification without rebuilding or moving that tag. Draft
+release downloads require a token with repository write access, even though
+this verification job only reads release assets.
+
 ## Package definitions
 
 `scripts/package-manifests.py` generates these files from the release checksum
