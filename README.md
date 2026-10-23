@@ -1,11 +1,11 @@
 # ⚡ killport
 
 > [!IMPORTANT]
-> **Official Distribution:** This repository is for viewing and auditing only. Please **DO NOT CLONE** this repository for usage. To install **killport**, please use the official binaries or package managers (Brew/Scoop) provided below to ensure you have the latest optimized version.
+> **Installation:** Use the official binaries or package managers below for a packaged release, or clone and build the MIT-licensed source.
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/paarths-collab/killport)](https://goreportcard.com/report/github.com/paarths-collab/killport)
 [![GitHub Release](https://img.shields.io/github/v/release/paarths-collab/killport)](https://github.com/paarths-collab/killport/releases)
-[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Inspect and free local ports, with JSON output and an optional identity-bound plan/apply workflow.
 
@@ -429,7 +429,16 @@ JSON avoids parsing terminal tables and provides explicit fields for scripts and
 
 ## 🛠 Development
 
-In an authorized source checkout, use the whole package (the implementation spans multiple Go files):
+Build from source with Go 1.25 or later. Use the whole package (the implementation spans multiple Go files):
+
+```bash
+git clone https://github.com/paarths-collab/killport.git
+cd killport
+go build -trimpath -o killport .
+./killport --version
+```
+
+Run the development checks:
 
 ```bash
 go run . --help
@@ -440,4 +449,6 @@ go test -count=1 ./...
 
 ## 📄 License
 
-Licensed under the Killport Proprietary License. Source cloning is restricted; please use official releases for installation.
+Licensed under the [MIT License](LICENSE). Source code may be used, modified and redistributed under its terms. Historical release archives retain their original license files; the MIT license is included in the current source and subsequent releases.
+
+See [Homebrew core submission readiness](docs/homebrew-core.md) for the remaining release and adoption requirements before `killport-cli` can be proposed for core.
