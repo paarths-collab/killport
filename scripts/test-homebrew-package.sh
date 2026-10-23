@@ -32,7 +32,7 @@ brew update
 outdated_status=0
 brew outdated --json=v2 "$formula" > "$RUNNER_TEMP/homebrew-outdated.json" || outdated_status=$?
 if [[ "$outdated_status" -gt 1 ]]; then exit "$outdated_status"; fi
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert any(x["name"] == "killport" and x["current_version"] == "1.2.0" for x in d["formulae"]), d' "$RUNNER_TEMP/homebrew-outdated.json"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert any(x["name"] == "paarths-collab/tap/killport" and x["installed_versions"] == ["1.1.0"] and x["current_version"] == "1.2.0" for x in d["formulae"]), d' "$RUNNER_TEMP/homebrew-outdated.json"
 brew upgrade "$formula"
 brew list --versions "$formula"
 brew test "$formula"
