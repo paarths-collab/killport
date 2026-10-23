@@ -1,0 +1,3 @@
+# Parser fixtures deliberately contain LF, CRLF, and CRCRLF byte sequences.
+# Keep captures unchanged when checking out on another operating system.
+/testdata/** -text
