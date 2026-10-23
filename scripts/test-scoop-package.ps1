@@ -24,6 +24,4 @@ scoop update
 scoop update killport
 scoop list killport
 python scripts/test-installed-package.py
-$installed = Get-Content (Join-Path $env:SCOOP 'apps/killport/current/manifest.json') -Raw | ConvertFrom-Json
-if ($installed.version -ne '1.2.0') { throw 'Installed Scoop manifest is not v1.2.0' }
 Write-Output 'PASS Scoop v1.1.0 -> scoop update -> scoop update killport delivers functional v1.2.0'

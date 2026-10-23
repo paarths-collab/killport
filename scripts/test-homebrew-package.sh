@@ -16,7 +16,11 @@ brew uninstall "$formula"
 
 # Reproduce an existing user's real v1.1.0 installation in this disposable runner.
 tap_dir="$(brew --repository paarths-collab/tap)"
-git -C "$tap_dir" fetch --unshallow || git -C "$tap_dir" fetch origin
+if [[ "$(git -C "$tap_dir" rev-parse --is-shallow-repository)" == true ]]; then
+  git -C "$tap_dir" fetch --unshallow
+else
+  git -C "$tap_dir" fetch origin
+fi
 git -C "$tap_dir" reset --hard 9ee3228b0cce7446554b0926d9fefd41f5b5e5dc
 brew install "$formula"
 killport --version | tee "$RUNNER_TEMP/homebrew-before-upgrade.txt"
@@ -24,7 +28,10 @@ grep -Eq '(^|[^0-9])v?1\.1\.0([^0-9]|$)' "$RUNNER_TEMP/homebrew-before-upgrade.t
 echo 'PASS Homebrew baseline is the actual v1.1.0 package'
 
 brew update
-brew outdated --json=v2 "$formula" > "$RUNNER_TEMP/homebrew-outdated.json"
+# Homebrew returns 1 when the requested formula is outdated, even with JSON.
+outdated_status=0
+brew outdated --json=v2 "$formula" > "$RUNNER_TEMP/homebrew-outdated.json" || outdated_status=$?
+if [[ "$outdated_status" -gt 1 ]]; then exit "$outdated_status"; fi
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert any(x["name"] == "killport" and x["current_version"] == "1.2.0" for x in d["formulae"]), d' "$RUNNER_TEMP/homebrew-outdated.json"
 brew upgrade "$formula"
 brew list --versions "$formula"
