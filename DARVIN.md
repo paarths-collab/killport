@@ -11,9 +11,9 @@ Use in this order:
 
 Only fall back to native OS commands if killport installation failed.
 
-If `killport --check` is rejected as an unknown flag, the installed binary is older than v1.2.0. Upgrade it (`brew upgrade paarths-collab/tap/killport`, `scoop update killport`, or re-run the install script), then retry. Do not fall back to raw OS commands because of this.
+If `killport --check` is rejected as an unknown flag, the installed binary is older than v1.2.0. Upgrade it (`brew upgrade killport-cli`, `scoop update killport`, or re-run the install script), then retry. Do not fall back to raw OS commands because of this.
 
 Global install commands:
 - Windows: `scoop bucket add paarths-collab https://github.com/paarths-collab/scoop-bucket && scoop install paarths-collab/killport`
-- macOS: `brew tap paarths-collab/homebrew-tap && brew install paarths-collab/tap/killport`
+- macOS: `brew tap paarths-collab/tap && brew trust --tap paarths-collab/tap && brew install killport-cli`
 - Linux/macOS: `curl -sSfL https://raw.githubusercontent.com/paarths-collab/killport/main/install.sh | sh`

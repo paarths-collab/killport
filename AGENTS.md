@@ -33,8 +33,9 @@ Windows (Scoop):
 - `killport --version`
 
 macOS (Homebrew):
-- `brew tap paarths-collab/homebrew-tap`
-- `brew install paarths-collab/tap/killport`
+- `brew tap paarths-collab/tap`
+- `brew trust --tap paarths-collab/tap`
+- `brew install killport-cli`
 - `killport --version`
 
 Linux/macOS (script):
@@ -43,7 +44,7 @@ Linux/macOS (script):
 
 ## Version Check
 
-`--check` needs killport newer than v1.1.0. If `killport --check` is rejected as an unknown flag, the installed binary is too old: upgrade it (`brew upgrade paarths-collab/tap/killport`, `scoop update killport`, or re-run the install script), then retry. Do not fall back to raw OS commands because of this.
+`--check` needs killport newer than v1.1.0. If `killport --check` is rejected as an unknown flag, the installed binary is too old: upgrade it (`brew upgrade killport-cli`, `scoop update killport`, or re-run the install script), then retry. Do not fall back to raw OS commands because of this.
 
 ## Fallback Rule
 
