@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 Run native Windows validation against prebuilt executables. No Go install is
-needed. TestBinary requires the repository's testdata/ beside it. The script
+needed. Copy internal/cli/testdata/ beside TestBinary as testdata/. The script
 creates only disposable child processes; it never targets an existing process.
 
   .\scripts\test-windows.ps1 -Binary .\killport.exe -TestBinary .\killport.test.exe

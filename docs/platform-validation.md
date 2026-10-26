@@ -44,7 +44,7 @@ Docker behavior or every alternative container runtime.
 
 Run on actual Windows using Windows PowerShell 5.1 or later. Prebuilt test
 executables do not require Go on the test machine. Build the CLI and Go test
-binary for the target Windows architecture; place `testdata/` alongside the
+binary for the target Windows architecture; copy `internal/cli/testdata/` alongside the
 test binary, then run:
 
 ```powershell
@@ -80,7 +80,7 @@ log and a summary confirming all six Windows validation groups:
 6. Classic termination stops only the owned replacement process.
 
 The first hosted Windows run exposed automatic LF-to-CRLF checkout conversion
-of a captured Linux fixture. `.gitattributes` now preserves every `testdata/`
+of a captured Linux fixture. `.gitattributes` now preserves every `internal/cli/testdata/`
 fixture byte-for-byte; the complete Windows suite and smoke checks passed after
 that correction. Deliberate CRLF and CRCRLF parser inputs remain unchanged.
 

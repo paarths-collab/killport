@@ -48,9 +48,9 @@ jobs:
           $tests = Join-Path $out 'killport.test.exe'
           go build -trimpath -buildvcs=false -o $binary .
           if ($LASTEXITCODE -ne 0) { throw 'Windows CLI build failed' }
-          go test -trimpath -buildvcs=false -c -o $tests .
+          go test -trimpath -buildvcs=false -c -o $tests ./internal/cli
           if ($LASTEXITCODE -ne 0) { throw 'Windows test build failed' }
-          Copy-Item -LiteralPath testdata -Destination (Join-Path $out 'testdata') -Recurse
+          Copy-Item -LiteralPath internal/cli/testdata -Destination (Join-Path $out 'testdata') -Recurse
           & .\scripts\test-windows.ps1 -Binary $binary -TestBinary $tests -LogDirectory (Join-Path $out 'logs')
 
       - name: Windows validation logs

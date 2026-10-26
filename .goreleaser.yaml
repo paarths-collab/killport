@@ -25,6 +25,8 @@ archives:
     files:
       - LICENSE
       - README.md
+      - docs/*.md
+      - docs/agents/*.md
 
 checksum:
   name_template: 'checksums.txt'
